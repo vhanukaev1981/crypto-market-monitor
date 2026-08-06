@@ -6,22 +6,30 @@ const migrationPath = new URL(
   "../supabase/migrations/20260806235000_add_platform_runtime_observation.sql",
   import.meta.url,
 );
+const permissionsPath = new URL(
+  "../supabase/migrations/20260806235900_lock_platform_observation_views_read_only.sql",
+  import.meta.url,
+);
 const pagePath = new URL("../app/platform/runtime/page.tsx", import.meta.url);
 const layoutPath = new URL("../app/platform/layout.tsx", import.meta.url);
 
 test("תצוגת Runtime משתמשת בהרשאות הקורא בלבד", async () => {
   const sql = await readFile(migrationPath, "utf8");
+  const permissions = await readFile(permissionsPath, "utf8");
 
   assert.match(sql, /create or replace view public\.platform_runtime_observation/i);
   assert.match(sql, /security_invoker\s*=\s*true/i);
-  assert.match(sql, /grant select on public\.platform_runtime_observation to authenticated/i);
-  assert.match(sql, /revoke all on public\.platform_runtime_observation from anon/i);
-  assert.doesNotMatch(sql, /grant\s+(insert|update|delete|all)/i);
   assert.doesNotMatch(sql, /update\s+public\./i);
   assert.doesNotMatch(sql, /insert\s+into\s+public\./i);
   assert.doesNotMatch(sql, /delete\s+from\s+public\./i);
   assert.doesNotMatch(sql, /net\.http_post/i);
   assert.doesNotMatch(sql, /api(?:-demo)?\.bybit\.com/i);
+
+  assert.match(permissions, /revoke all on public\.platform_runtime_observation from anon, authenticated/i);
+  assert.match(permissions, /grant select on public\.platform_runtime_observation to authenticated/i);
+  assert.match(permissions, /revoke all on public\.platform_legacy_bot_mapping from anon, authenticated/i);
+  assert.match(permissions, /grant select on public\.platform_legacy_bot_mapping to authenticated/i);
+  assert.doesNotMatch(permissions, /grant\s+(insert|update|delete|all)/i);
 });
 
 test("מסך Runtime קורא את התצוגה ואינו מבצע פעולות", async () => {
