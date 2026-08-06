@@ -11,10 +11,10 @@
 | bot-engine | 43 | לא | `1ae2d7e4509cb4b1916a4900318cab052038cfd4b9650f6fd598aed499510014` |
 | bybit-connection-probe | 6 | כן | `4cef9aefe5ac3ea2edf72ab451f8724d957cd6cf2fce70a8ee7f07f3306fb3d5` |
 | bot-order-status | 2 | לא | `2952caff94b37543e5fd08e71f57d0874dd81e7d18eba330a8891625d66fda7c` |
-| bot-smoke-test | 2 | לא | `a316be428c70433ab05cdd06f3fe32165290f911799b2c2698e4cbd79424a681` |
+| bot-smoke-test | 3 | כן | `3a8dccc8564a41d7e7374585844f44884ea01428a988338c3c834c5650dd9283` |
 | bot-cron-runner | 5 | לא | `d3acd96968a1aa4dd1fd13fb886e36e5163f6660419718157a7f7317836198b3` |
 | bot-engine-v2 | 2 | לא | `5f96793e4a51c06ad78fc8cb5d1126c51ba40506202f0822a5b7335109f6c79f` |
-| bot-protection-smoke-test | 2 | לא | `a426aa914936473b6e54d3f3a30aba424db0fb00b3917a38d8f4e8bd43b63dce` |
+| bot-protection-smoke-test | 3 | כן | `462353bf44ae185fb35fca01fc502db17b8b68477edba6c71f8b892a7c0b3b9a` |
 | bot-private-stream | 2 | לא | `a48b8f0ddcb5acdcdb800d1f44132fd843bbc510ef5647ca502c61063ce0ebb0` |
 | bot-engine-orchestrator | 2 | לא | `198ac0c7727a2f7f8eacad9b4a13a08647d55db0b3487b648b3e8f49a2b68bd7` |
 | bot-smart-exit-manager | 5 | לא | `2286a058b4073a7c0f9d691caa778958c95be55c0915b4982fe7c7c9b674c376` |
@@ -34,6 +34,12 @@
 | bybit-demo-live-snapshot-cron | 2 | לא | `ca7f81abb63bed258224e7700d7104b271f87c101a7d36e38519216f08ccbe32` |
 | strategy-lab-v3 | 2 | לא | `34b49613304bfa442a4842aed270a78458dde4ef08d6c1d77b80157736aad246` |
 | bot-engine-v3 | 2 | לא | `290099c7b72ac67486ea02a27771459ec5454640620812da65cb0b552d7bb3b7` |
+
+## שינויים שכבר הוחלו
+
+- `bot-smoke-test` הועבר ל־`verify_jwt=true` ואינו מתוזמן ב־Cron.
+- `bot-protection-smoke-test` הועבר ל־`verify_jwt=true` ואינו מתוזמן ב־Cron.
+- שתי הפונקציות נשמרו במאגר ללא סודות.
 
 ## עדיפות לייצוא מקור
 
