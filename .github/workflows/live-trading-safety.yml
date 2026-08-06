@@ -1,0 +1,48 @@
+name: Live Trading Safety
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - platform-v2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-trading-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  safety:
+    name: בדיקות בטיחות ובנייה
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: crypto-market-monitor-full-source
+
+    steps:
+      - name: משיכת הקוד
+        uses: actions/checkout@v4
+
+      - name: הגדרת Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crypto-market-monitor-full-source/package-lock.json
+
+      - name: התקנת תלויות
+        run: npm ci --ignore-scripts
+
+      - name: בדיקת חסימות מסחר חי
+        run: node scripts/check-live-safety.mjs
+
+      - name: בדיקות ויצירת Build
+        run: npm test
+
+      - name: בדיקת תלויות ברמת חומרה גבוהה
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
