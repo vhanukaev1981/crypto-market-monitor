@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const migrationPath = new URL(
+const mappingMigrationPath = new URL(
   "../supabase/migrations/20260806203300_observe_legacy_runtime_in_platform_mapping.sql",
+  import.meta.url,
+);
+const invokerMigrationPath = new URL(
+  "../supabase/migrations/20260806204100_set_platform_mapping_security_invoker.sql",
   import.meta.url,
 );
 
 test("מרכז השליטה צופה ב־Legacy בלי לקבל שליטת ביצוע", async () => {
-  const sql = await readFile(migrationPath, "utf8");
+  const sql = await readFile(mappingMigrationPath, "utf8");
 
   assert.match(sql, /create or replace view public\.platform_legacy_bot_mapping/i);
   assert.match(sql, /left join public\.bot_configs/i);
@@ -24,8 +28,10 @@ test("מרכז השליטה צופה ב־Legacy בלי לקבל שליטת בי�
 });
 
 test("התצוגה נשארת זמינה לקריאה בלבד למשתמש מחובר", async () => {
-  const sql = await readFile(migrationPath, "utf8");
+  const mappingSql = await readFile(mappingMigrationPath, "utf8");
+  const invokerSql = await readFile(invokerMigrationPath, "utf8");
 
-  assert.match(sql, /grant select on public\.platform_legacy_bot_mapping to authenticated/i);
-  assert.doesNotMatch(sql, /grant\s+(insert|update|delete|all)/i);
+  assert.match(mappingSql, /grant select on public\.platform_legacy_bot_mapping to authenticated/i);
+  assert.doesNotMatch(mappingSql, /grant\s+(insert|update|delete|all)/i);
+  assert.match(invokerSql, /security_invoker\s*=\s*true/i);
 });
