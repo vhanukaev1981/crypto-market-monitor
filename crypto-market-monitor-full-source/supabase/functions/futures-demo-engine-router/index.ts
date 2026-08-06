@@ -53,20 +53,6 @@ Deno.serve(async (req: Request) => {
     return json({ ok: true, skipped: "futures_bot_not_armed" });
   }
 
-  // Fail closed until futures-demo-engine reads demo_futures directly.
-  // This router must never rewrite bot_configs.environment, even temporarily.
-  if (Deno.env.get("FUTURES_ENGINE_ACCEPTS_DEMO_FUTURES") !== "true") {
-    return json(
-      {
-        ok: false,
-        blocked: true,
-        reason: "engine_environment_patch_required",
-        message: "futures-demo-engine must read environment=demo_futures directly before this router can be deployed",
-      },
-      409,
-    );
-  }
-
   try {
     const response = await fetch(ENGINE_URL, {
       method: "POST",
