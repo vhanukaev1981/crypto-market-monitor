@@ -1,41 +1,49 @@
-# תיקון נדרש לפני פריסת נתב Futures החדש
+# תיקון נתב ומנוע Futures — הושלם
 
-הפונקציה הפעילה `futures-demo-engine` מחפשת כיום את הגדרת הבוט כך:
+ב־6 באוגוסט 2026 תוקן חלון המרוץ שנגרם מכך שהנתב הישן שינה זמנית את `bot_configs.environment`.
+
+## השינוי שבוצע
+
+המנוע `futures-demo-engine` קורא כעת ישירות את הגדרת הבוט:
 
 ```ts
-.eq("environment", "demo")
-.eq("category", "linear")
+.eq("environment", CONFIG_ENVIRONMENT)
 ```
 
-הנתב הישן עקף זאת באמצעות שינוי זמני של `bot_configs.environment` מ־`demo_futures` ל־`demo`, קריאה למנוע והחזרת הערך. דפוס זה יוצר חלון מרוץ מול פונקציות Spot שמחפשות רשומת `demo` יחידה.
+כאשר:
 
-## השינוי הנדרש במנוע
-
-יש להחליף רק את מסנן סביבת ההגדרה:
-
-```diff
-- .eq("environment", "demo")
-+ .eq("environment", "demo_futures")
+```ts
+const CONFIG_ENVIRONMENT = "demo_futures";
 ```
 
-אין לשנות את:
+הנתב `futures-demo-engine-router` אינו מבצע עוד `update` לטבלת `bot_configs` ואינו משנה את הסביבה, גם לא זמנית.
 
-- `BASE_URL`, שחייב להישאר `https://api-demo.bybit.com`.
-- `BYBIT_ENV`, שחייב להישאר `demo` כי זהו שם סביבת החיבור לבורסה.
-- שדה `orders.environment`, שיכול להישאר `demo` לציון שהפקודה בוצעה בחשבון Demo.
-- מגבלות 10–50 USDT, מינוף 1, Kill Switch או אימות TP/SL.
+## בקרות שנשמרו
 
-## סדר פריסה בטוח
+- כתובת הבורסה נשארה `https://api-demo.bybit.com`.
+- `BYBIT_ENV` נשאר `demo`.
+- מגבלת פקודה נשארה 10–50 USDT.
+- המינוף נשאר 1.
+- אימות Native Stop Loss ו־Take Profit נשאר פעיל.
+- אימות אסימון Cron פרטי נשאר פעיל.
+- Mainnet ומשיכות נשארו חסומים.
 
-1. לייצא את המקור המלא של `futures-demo-engine` ל־GitHub.
-2. להחיל את שינוי המסנן לעיל בלבד.
-3. להריץ בדיקה סטטית שאין כתובת Mainnet ושאין נתיב משיכה.
-4. לפרוס את `futures-demo-engine` ולבדוק ריצה ידנית כשהבוט אינו חמוש.
-5. להפעיל את המשתנה `FUTURES_ENGINE_ACCEPTS_DEMO_FUTURES=true`.
-6. לפרוס את הנתב החדש.
-7. לבדוק בלוגים של Spot ו־Futures במקביל.
-8. רק לאחר הצלחה להחזיר את תזמון ה־Cron לשגרה.
+## אימות שבוצע
 
-## תנאי עצירה
+- `futures-demo-engine` נפרס כגרסה 3.
+- `futures-demo-engine-router` נפרס כגרסה 3.
+- ריצת אימות דרך `public.invoke_futures_demo_engine()` הסתיימה ב־HTTP 200.
+- התגובה דיווחה `environment=demo_futures` וללא פעולות מסחר.
+- מנוע Spot המשיך להשלים ריצות ללא כשל.
+- ה־Private Stream נשאר מאומת וללא שגיאה.
+- תזמון `futures_demo_engine_15m` הוחזר לפעילות לאחר האימות.
 
-אין לפרוס את הנתב החדש לפני תיקון המנוע. הנתב ב־PR נכשל במכוון במצב סגור (`fail closed`) כל עוד משתנה האישור אינו `true`.
+## בדיקות רגרסיה
+
+הבדיקה `tests/futures-router-safety.test.mjs` מוודאת כי:
+
+- הנתב אינו משנה את סביבת הבוט.
+- הנתב מחפש `demo_futures` בלבד.
+- המנוע קורא `demo_futures` ישירות.
+- המנוע נשאר נעול לכתובת Bybit Demo.
+- לא קיים נתיב משיכה.
