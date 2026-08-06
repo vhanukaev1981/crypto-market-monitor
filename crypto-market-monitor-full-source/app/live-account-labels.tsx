@@ -29,21 +29,20 @@ function rewriteText(root: ParentNode) {
   }
 }
 
+function setText(element: Element | null | undefined, value: string) {
+  if (element && element.textContent !== value) element.textContent = value;
+}
+
 function applyModeLabels() {
   const sideFooter = document.querySelector(".side-footer");
-  const footerStrong = sideFooter?.querySelector("strong");
-  const footerSmall = sideFooter?.querySelector("small");
-  if (footerStrong) footerStrong.textContent = "LIVE DATA מחובר";
-  if (footerSmall) footerSmall.textContent = "ביצוע Demo · נעול";
+  setText(sideFooter?.querySelector("strong"), "LIVE DATA מחובר");
+  setText(sideFooter?.querySelector("small"), "ביצוע Demo · נעול");
 
   const modeSwitch = document.querySelector(".mode-switch");
-  const modePrimary = modeSwitch?.querySelector("b");
-  const modeSecondary = modeSwitch?.querySelector("span");
-  if (modePrimary) modePrimary.textContent = "LIVE DATA";
-  if (modeSecondary) modeSecondary.textContent = "EXECUTION 🔒";
+  setText(modeSwitch?.querySelector("b"), "LIVE DATA");
+  setText(modeSwitch?.querySelector("span"), "EXECUTION 🔒");
 
-  const appFooter = document.querySelector(".workspace > footer span");
-  if (appFooter) appFooter.textContent = "נתוני Mainnet · ביצוע נעול";
+  setText(document.querySelector(".workspace > footer span"), "נתוני Mainnet · ביצוע נעול");
 }
 
 function applyLabels() {
