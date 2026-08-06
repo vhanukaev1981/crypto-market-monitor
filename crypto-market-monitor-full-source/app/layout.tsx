@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "./upgrade.css";
+import LiveAccountLabels from "./live-account-labels";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -15,7 +16,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Crypto Market Monitor — Trading OS",
-  description: "מערכת המסחר האלגוריתמית האישית בסביבת Demo מאובטחת.",
+  description: "נתוני חשבון Bybit Mainnet מחוברים לקריאה בלבד; ביצוע המסחר נשאר נעול.",
   other: {
     "codex-preview": "development",
   },
@@ -35,6 +36,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <LiveAccountLabels />
         {children}
       </body>
     </html>
