@@ -4,7 +4,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.95.0";
 const OWNER_ID = "2e999f38-5e82-4441-9b14-ee7a659e8201";
 const BASE_URL = "https://api.bybit.com";
 const RECV_WINDOW = "5000";
-const CONNECTION_VERSION = "bybit-live-readonly-probe-v1";
+const CONNECTION_VERSION = "bybit-live-readonly-probe-v2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -35,6 +35,7 @@ async function requireOwner(req: Request) {
   const authHeader = req.headers.get("Authorization") || "";
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!token) throw new Error("Unauthorized");
+
   const client = createClient(
     Deno.env.get("SUPABASE_URL") || "",
     Deno.env.get("SUPABASE_ANON_KEY") || "",
@@ -71,11 +72,12 @@ async function bybitGet(path: string, params: Record<string, string> = {}) {
   const { apiKey, apiSecret } = credentials();
   const timestamp = Date.now().toString();
   const query = new URLSearchParams();
-  Object.entries(params).sort(([a], [b]) => a.localeCompare(b)).forEach(([key, value]) => query.set(key, value));
+  Object.entries(params)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .forEach(([key, value]) => query.set(key, value));
   const payload = query.toString();
   const signature = await hmacHex(apiSecret, timestamp + apiKey + RECV_WINDOW + payload);
-  const url = `${BASE_URL}${path}${payload ? `?${payload}` : ""}`;
-  const response = await fetch(url, {
+  const response = await fetch(`${BASE_URL}${path}${payload ? `?${payload}` : ""}`, {
     method: "GET",
     headers: {
       "X-BAPI-API-KEY": apiKey,
@@ -86,6 +88,7 @@ async function bybitGet(path: string, params: Record<string, string> = {}) {
     },
     signal: AbortSignal.timeout(20_000),
   });
+
   const text = await response.text();
   let data: Record<string, any>;
   try {
@@ -97,29 +100,66 @@ async function bybitGet(path: string, params: Record<string, string> = {}) {
   return data.result;
 }
 
-function permissionList(value: unknown) {
+function list(value: unknown) {
   return Array.isArray(value) ? value.map(String) : [];
 }
 
+function assertAllowedItems(actual: string[], allowed: string[], scope: string) {
+  const unexpected = actual.filter((item) => !allowed.includes(item));
+  if (unexpected.length) throw new Error(`Unexpected ${scope} permission: ${unexpected.join(", ")}`);
+}
+
 function assertReadOnly(apiInfo: Record<string, any>) {
-  if (Number(apiInfo.readOnly) !== 1) throw new Error("The Live API key must be read-only for the first connection stage");
-  const permissions = apiInfo.permissions || {};
-  const wallet = permissionList(permissions.Wallet);
-  const spot = permissionList(permissions.Spot);
-  const contract = permissionList(permissions.ContractTrade);
-  const forbiddenWallet = wallet.filter((item) => ["Withdraw", "AccountTransfer", "SubMemberTransfer"].includes(item));
-  if (forbiddenWallet.length) throw new Error("Wallet transfer or withdrawal permissions are forbidden");
-  if (spot.includes("SpotTrade") || contract.includes("Order") || contract.includes("Position")) {
-    throw new Error("Trading permissions are forbidden during the read-only connection stage");
+  if (Number(apiInfo.readOnly) !== 1) {
+    throw new Error("The Live API key must be globally Read-Only");
   }
+
+  const source = apiInfo.permissions || {};
+  const permissions = {
+    contract: list(source.ContractTrade),
+    spot: list(source.Spot),
+    options: list(source.Options),
+    derivatives: list(source.Derivatives),
+    wallet: list(source.Wallet),
+    exchange: list(source.Exchange),
+    earn: list(source.Earn),
+    fiatP2P: list(source.FiatP2P),
+    fiatBitPay: list(source.FiatBitPay),
+    fiatConvertBroker: list(source.FiatConvertBroker),
+    bitCard: list(source.BitCard),
+    byXPost: list(source.ByXPost),
+    affiliate: list(source.Affiliate),
+    blockTrade: list(source.BlockTrade),
+  };
+
+  // Bybit returns these values as selected query scopes even when readOnly=1.
+  assertAllowedItems(permissions.contract, ["Order", "Position"], "ContractTrade");
+  assertAllowedItems(permissions.spot, ["SpotTrade"], "Spot");
+  assertAllowedItems(permissions.options, ["OptionsTrade"], "Options");
+  assertAllowedItems(permissions.derivatives, ["DerivativesTrade"], "Derivatives");
+
+  const forbiddenScopes = [
+    ...permissions.wallet,
+    ...permissions.exchange,
+    ...permissions.earn,
+    ...permissions.fiatP2P,
+    ...permissions.fiatBitPay,
+    ...permissions.fiatConvertBroker,
+    ...permissions.bitCard,
+    ...permissions.byXPost,
+    ...permissions.affiliate,
+    ...permissions.blockTrade,
+  ];
+  if (forbiddenScopes.length) {
+    throw new Error("The first Live connection must include Unified Trading query scopes only; Assets and other scopes must remain unchecked");
+  }
+
   return {
     read: true,
     trade: false,
     withdraw: false,
     readOnly: true,
-    spot,
-    contract,
-    wallet,
+    ...permissions,
   };
 }
 
@@ -127,7 +167,14 @@ async function markFailure(errorText: string) {
   const client = adminClient();
   await client
     .from("exchange_connections")
-    .update({ status: "error", last_error: errorText.slice(0, 500), last_checked_at: new Date().toISOString(), trading_enabled: false, withdrawals_enabled: false, is_read_only: true })
+    .update({
+      status: "error",
+      last_error: errorText.slice(0, 500),
+      last_checked_at: new Date().toISOString(),
+      trading_enabled: false,
+      withdrawals_enabled: false,
+      is_read_only: true,
+    })
     .eq("user_id", OWNER_ID)
     .eq("exchange", "bybit")
     .eq("environment", "mainnet");
