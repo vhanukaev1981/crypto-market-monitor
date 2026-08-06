@@ -28,8 +28,8 @@
 | futures-strategy-lab-runner | 2 | לא | `b38601fb37e30b1354a0b2b95acb262cc277eb8fb3cf85940c063050f1b7b7c0` |
 | bybit-futures-demo-preflight | 2 | לא | `feb30ea42667d386670f0e16863b4a2b1036211b01f612565a7d9a53a1d505c0` |
 | bybit-demo-account-audit | 2 | לא | `33b17ca16c72cff2c0e41e089f7d71b955c39bccfe39b7bf53a3129f42e338f1` |
-| futures-demo-engine | 2 | לא | `74895dff886e5021d26bbac2cc7b5678dc41326f3441eaef1df60d2ad9e40a6d` |
-| futures-demo-engine-router | 2 | לא | `feb27a6241406575ea02e793ec3f21d400065516b5f53b81077d1d086b2b476b` |
+| futures-demo-engine | 3 | לא | `38d50d8c32f260364dec60c238d72d985d7ce5cb7576b92ef7487e1e63cb20ec` |
+| futures-demo-engine-router | 3 | לא | `c1326ac61c3914f29cd09b331433276849877c425b4c90450b7d9a539326ad29` |
 | bybit-demo-live-snapshot | 3 | כן | `0aad7e4b31e783514b5c993a37e92bb90d5a519361fec216cfc3474be8319fb7` |
 | bybit-demo-live-snapshot-cron | 2 | לא | `ca7f81abb63bed258224e7700d7104b271f87c101a7d36e38519216f08ccbe32` |
 | strategy-lab-v3 | 2 | לא | `34b49613304bfa442a4842aed270a78458dde4ef08d6c1d77b80157736aad246` |
@@ -39,16 +39,18 @@
 
 - `bot-smoke-test` הועבר ל־`verify_jwt=true` ואינו מתוזמן ב־Cron.
 - `bot-protection-smoke-test` הועבר ל־`verify_jwt=true` ואינו מתוזמן ב־Cron.
-- שתי הפונקציות נשמרו במאגר ללא סודות.
+- `futures-demo-engine` יוצא במלואו ל־GitHub ותוקן לקריאה ישירה של `demo_futures`.
+- `futures-demo-engine-router` אינו משנה עוד את `bot_configs.environment`.
+- ריצת אימות ידנית וריצת Cron מתוזמנת הסתיימו בהצלחה וללא פעולות מסחר.
+- המקורות שנשמרו במאגר אינם כוללים סודות.
 
-## עדיפות לייצוא מקור
+## עדיפות לייצוא מקור שנותרה
 
-1. `futures-demo-engine`
-2. `bot-engine-v3`
-3. `bot-private-stream`
-4. `bot-smart-exit-manager`
-5. `bot-cron-runner`
-6. `bybit-demo`
-7. יתר הפונקציות לפי תלות וסיכון
+1. `bot-engine-v3`
+2. `bot-private-stream`
+3. `bot-smart-exit-manager`
+4. `bot-cron-runner`
+5. `bybit-demo`
+6. יתר הפונקציות לפי תלות וסיכון
 
 אין להעתיק ל־GitHub ערכי סודות, מפתחות API או אסימוני Cron. כל ערך כזה יוחלף בקריאת `Deno.env` או באחסון פרטי מוגן.
