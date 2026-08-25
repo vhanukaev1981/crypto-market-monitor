@@ -57,3 +57,27 @@ test('reconciliation detects equity mismatch beyond tolerance', () => {
   assert.equal(bad.ok, false);
   assert.equal(bad.reasonCode, 'PNL_001_EQUITY_MISMATCH');
 });
+
+test('computes net pnl relative to starting equity', () => {
+  const result = markPortfolio({
+    cash: 1025,
+    positions: {},
+    marks: {},
+    peakEquity: 1050,
+    startingEquity: 1000,
+  });
+  approx(result.netPnl, 25);
+  approx(result.netPnlPct, 2.5);
+});
+
+test('computes daily pnl and daily pnl percent from day-start equity', () => {
+  const result = markPortfolio({
+    cash: 985,
+    positions: {},
+    marks: {},
+    peakEquity: 1000,
+    dayStartEquity: 1000,
+  });
+  approx(result.dailyPnl, -15);
+  approx(result.dailyPnlPct, -1.5);
+});
