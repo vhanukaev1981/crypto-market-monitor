@@ -56,3 +56,41 @@ test('halts new trading above max drawdown', () => {
   assert.equal(result.decision, 'HALT_SYSTEM');
   assert.equal(result.reasonCode, 'RISK_003_MAX_DRAWDOWN');
 });
+
+test('reduces size by half in high volatility', () => {
+  const result = evaluateRisk({
+    portfolioEquity: 1000,
+    dailyPnlPct: 0,
+    drawdownPct: 0,
+    volatilityLevel: 'high',
+    currentSymbolExposurePct: 0,
+    maxSymbolExposurePct: 40,
+    requestedNotional: 200,
+    spreadBps: 2,
+    maxSpreadBps: 10,
+    estimatedSlippageBps: 2,
+    maxSlippageBps: 10,
+  });
+  assert.equal(result.decision, 'REDUCED_SIZE');
+  assert.equal(result.approvedNotional, 100);
+  assert.equal(result.reasonCode, 'RISK_010_VOLATILITY_REDUCTION');
+});
+
+test('reduces size by half when drawdown is between 3.5% and 5%', () => {
+  const result = evaluateRisk({
+    portfolioEquity: 1000,
+    dailyPnlPct: 0,
+    drawdownPct: 4,
+    volatilityLevel: 'normal',
+    currentSymbolExposurePct: 0,
+    maxSymbolExposurePct: 40,
+    requestedNotional: 200,
+    spreadBps: 2,
+    maxSpreadBps: 10,
+    estimatedSlippageBps: 2,
+    maxSlippageBps: 10,
+  });
+  assert.equal(result.decision, 'REDUCED_SIZE');
+  assert.equal(result.approvedNotional, 100);
+  assert.equal(result.reasonCode, 'RISK_011_DRAWDOWN_REDUCTION');
+});
