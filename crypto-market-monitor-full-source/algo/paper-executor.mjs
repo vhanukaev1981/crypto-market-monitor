@@ -12,11 +12,7 @@ export class PaperExecutionEngine {
 
   static fromState(state) {
     if (!state || state.version !== 1) throw new Error('INVALID_STATE');
-    const engine = new PaperExecutionEngine({
-      startingCash: state.cash,
-      takerFeeBps: state.takerFeeBps,
-      slippageBps: state.slippageBps,
-    });
+    const engine = new PaperExecutionEngine({ startingCash: state.cash, takerFeeBps: state.takerFeeBps, slippageBps: state.slippageBps });
     engine.realizedPnl = state.realizedPnl;
     engine.orders = new Map(state.orders.map((o) => [o.clientOrderId, structuredClone(o)]));
     engine.fills = new Map(state.fills.map((f) => [f.fillId, structuredClone(f)]));
