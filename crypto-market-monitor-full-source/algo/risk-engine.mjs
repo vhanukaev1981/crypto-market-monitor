@@ -39,13 +39,23 @@ export function evaluateRisk(input) {
 
   const availableExposurePct = Math.max(0, maxSymbolExposurePct - currentSymbolExposurePct);
   const availableNotional = portfolioEquity * (availableExposurePct / 100);
-  const approvedNotional = Math.max(0, Math.min(requestedNotional, availableNotional));
+
+  const volatilityMultiplier = volatilityLevel === 'high' ? 0.5 : volatilityLevel === 'elevated' ? 0.75 : 1;
+  const drawdownMultiplier = drawdownPct >= 3.5 ? 0.5 : drawdownPct >= 2 ? 0.75 : 1;
+  const riskAdjustedNotional = requestedNotional * volatilityMultiplier * drawdownMultiplier;
+  const approvedNotional = Math.max(0, Math.min(riskAdjustedNotional, availableNotional));
 
   if (approvedNotional <= 0) {
     return { decision: 'REJECTED', approvedNotional: 0, reasonCode: 'RISK_009_SYMBOL_EXPOSURE' };
   }
 
   if (approvedNotional < requestedNotional) {
+    if (drawdownMultiplier < 1) {
+      return { decision: 'REDUCED_SIZE', approvedNotional, reasonCode: 'RISK_011_DRAWDOWN_REDUCTION' };
+    }
+    if (volatilityMultiplier < 1) {
+      return { decision: 'REDUCED_SIZE', approvedNotional, reasonCode: 'RISK_010_VOLATILITY_REDUCTION' };
+    }
     return { decision: 'REDUCED_SIZE', approvedNotional, reasonCode: 'RISK_009_SYMBOL_EXPOSURE' };
   }
 
