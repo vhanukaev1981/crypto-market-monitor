@@ -41,7 +41,7 @@ test('duplicate client order id is idempotent', () => {
 test('duplicate fill id cannot mutate portfolio twice', () => {
   const e = engine();
   e.createOrder({ clientOrderId: 'o3', symbol: 'ETHUSDT', side: 'BUY', qty: 1 });
-  const first = e.applyMarketFill({ fillId: 'same-fill', clientOrderId: 'o3', qty: 1, bid: 99, ask: 100 });
+  e.applyMarketFill({ fillId: 'same-fill', clientOrderId: 'o3', qty: 1, bid: 99, ask: 100 });
   const cashAfterFirst = e.snapshot().cash;
   const second = e.applyMarketFill({ fillId: 'same-fill', clientOrderId: 'o3', qty: 1, bid: 99, ask: 100 });
   assert.equal(second.duplicate, true);
@@ -62,4 +62,33 @@ test('round trip realized pnl and cash reconcile net of both fees', () => {
   approx(sell.realizedPnlDelta, sellNet - buyCost);
   approx(snap.cash, 1000 + snap.realizedPnl);
   assert.equal(snap.positions.ETHUSDT.qty, 0);
+});
+
+test('state can be restored after restart without losing idempotency', () => {
+  const e = engine();
+  e.createOrder({ clientOrderId: 'restore', symbol: 'ETHUSDT', side: 'BUY', qty: 2 });
+  e.applyMarketFill({ fillId: 'restore-fill-1', clientOrderId: 'restore', qty: 1, bid: 99, ask: 100 });
+  const restored = PaperExecutionEngine.fromState(e.exportState());
+  const duplicate = restored.applyMarketFill({ fillId: 'restore-fill-1', clientOrderId: 'restore', qty: 1, bid: 99, ask: 100 });
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(restored.snapshot().positions.ETHUSDT.qty, 1);
+  const finalFill = restored.applyMarketFill({ fillId: 'restore-fill-2', clientOrderId: 'restore', qty: 1, bid: 99, ask: 100 });
+  assert.equal(finalFill.order.status, 'FILLED');
+  assert.equal(restored.snapshot().positions.ETHUSDT.qty, 2);
+});
+
+test('insufficient cash failure leaves portfolio unchanged', () => {
+  const e = engine();
+  e.createOrder({ clientOrderId: 'too-big', symbol: 'BTCUSDT', side: 'BUY', qty: 100 });
+  const before = e.snapshot();
+  assert.throws(() => e.applyMarketFill({ fillId: 'too-big-fill', clientOrderId: 'too-big', qty: 100, bid: 99, ask: 100 }), /INSUFFICIENT_CASH/);
+  assert.deepEqual(e.snapshot(), before);
+});
+
+test('oversell failure leaves portfolio unchanged', () => {
+  const e = engine();
+  e.createOrder({ clientOrderId: 'oversell', symbol: 'ETHUSDT', side: 'SELL', qty: 1 });
+  const before = e.snapshot();
+  assert.throws(() => e.applyMarketFill({ fillId: 'oversell-fill', clientOrderId: 'oversell', qty: 1, bid: 100, ask: 101 }), /INSUFFICIENT_POSITION/);
+  assert.deepEqual(e.snapshot(), before);
 });
