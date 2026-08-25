@@ -44,6 +44,9 @@ export function evaluateTrendPullback(input) {
   if (!Number.isFinite(atr) || atr <= 0) {
     return { action: 'NO_TRADE', score: 0, reason: 'INVALID_ATR' };
   }
+  if (price > ema20 + 1.5 * atr) {
+    return { action: 'NO_TRADE', score: 0, reason: 'NO_CHASE' };
+  }
 
   const nearEma20 = Math.abs(price - ema20) <= 0.75 * atr;
   const nearEma50 = Math.abs(price - ema50) <= 0.5 * atr;
