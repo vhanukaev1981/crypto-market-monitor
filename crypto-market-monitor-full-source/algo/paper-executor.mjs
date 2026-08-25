@@ -10,10 +10,35 @@ export class PaperExecutionEngine {
     this.realizedPnl = 0;
   }
 
+  static fromState(state) {
+    if (!state || state.version !== 1) throw new Error('INVALID_STATE');
+    const engine = new PaperExecutionEngine({
+      startingCash: state.cash,
+      takerFeeBps: state.takerFeeBps,
+      slippageBps: state.slippageBps,
+    });
+    engine.realizedPnl = state.realizedPnl;
+    engine.orders = new Map(state.orders.map((o) => [o.clientOrderId, structuredClone(o)]));
+    engine.fills = new Map(state.fills.map((f) => [f.fillId, structuredClone(f)]));
+    engine.positions = new Map(state.positions.map(([symbol, p]) => [symbol, structuredClone(p)]));
+    return engine;
+  }
+
+  exportState() {
+    return {
+      version: 1,
+      cash: this.cash,
+      takerFeeBps: this.takerFeeBps,
+      slippageBps: this.slippageBps,
+      realizedPnl: this.realizedPnl,
+      orders: [...this.orders.values()].map((o) => structuredClone(o)),
+      fills: [...this.fills.values()].map((f) => structuredClone(f)),
+      positions: [...this.positions.entries()].map(([symbol, p]) => [symbol, structuredClone(p)]),
+    };
+  }
+
   createOrder({ clientOrderId, symbol, side, qty, type = 'MARKET' }) {
-    if (!clientOrderId || !symbol || !['BUY', 'SELL'].includes(side) || !Number.isFinite(qty) || qty <= 0) {
-      throw new Error('INVALID_ORDER');
-    }
+    if (!clientOrderId || !symbol || !['BUY', 'SELL'].includes(side) || !Number.isFinite(qty) || qty <= 0) throw new Error('INVALID_ORDER');
     if (this.orders.has(clientOrderId)) return { order: structuredClone(this.orders.get(clientOrderId)), duplicate: true };
     const order = { clientOrderId, symbol, side, qty, type, filledQty: 0, averageFillPrice: 0, status: 'CREATED' };
     this.orders.set(clientOrderId, order);
@@ -21,6 +46,7 @@ export class PaperExecutionEngine {
   }
 
   applyMarketFill({ fillId, clientOrderId, qty, bid, ask }) {
+    if (!fillId) throw new Error('INVALID_FILL_ID');
     if (this.fills.has(fillId)) return { ...structuredClone(this.fills.get(fillId)), duplicate: true };
     const order = this.orders.get(clientOrderId);
     if (!order) throw new Error('ORDER_NOT_FOUND');
@@ -59,7 +85,6 @@ export class PaperExecutionEngine {
     order.filledQty += qty;
     order.averageFillPrice = ((order.averageFillPrice * previousFilled) + (price * qty)) / order.filledQty;
     order.status = Math.abs(order.filledQty - order.qty) < 1e-12 ? 'FILLED' : 'PARTIALLY_FILLED';
-
     const fill = { fillId, clientOrderId, qty, price, fee, realizedPnlDelta, order: structuredClone(order), duplicate: false };
     this.fills.set(fillId, fill);
     return structuredClone(fill);
