@@ -1,2 +1,2 @@
-run=30
-reason=RED harness signal funnel events before integration implementation
+run=31
+reason=GREEN signal funnel harness integration before Bybit funnel analysis
