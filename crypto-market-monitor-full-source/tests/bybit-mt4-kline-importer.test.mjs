@@ -37,8 +37,35 @@ test('aggregates exactly four contiguous 15m candles into one 1H candle', () => 
   });
 });
 
-test('drops incomplete hourly buckets and rejects duplicate timestamps', () => {
+test('drops incomplete hourly buckets', () => {
   const rows = parseBybitMt4Klines15m(sample);
   assert.equal(aggregate15mTo1h(rows).length, 1);
-  assert.throws(() => parseBybitMt4Klines15m(sample + '\n' + sample.split('\n')[0]), /DUPLICATE_OR_NON_ASCENDING_MT4_TIMESTAMP/);
+});
+
+test('deduplicates an identical repeated timestamp at archive boundaries', () => {
+  const duplicateBoundary = [
+    '2024.01.31 23:45,100,102,99,101,10',
+    '2024.02.01 00:00,101,103,100,102,20',
+    '2024.02.01 00:00,101,103,100,102,20',
+    '2024.02.01 00:15,102,104,101,103,30',
+  ].join('\n');
+  const rows = parseBybitMt4Klines15m(duplicateBoundary);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[1].time, '2024-02-01T00:00:00.000Z');
+});
+
+test('fails closed when duplicate timestamp has conflicting OHLCV', () => {
+  const conflicting = [
+    '2024.02.01 00:00,101,103,100,102,20',
+    '2024.02.01 00:00,101,104,100,102,20',
+  ].join('\n');
+  assert.throws(() => parseBybitMt4Klines15m(conflicting), /CONFLICTING_MT4_DUPLICATE/);
+});
+
+test('rejects backward timestamps', () => {
+  const backward = [
+    '2024.02.01 00:15,102,104,101,103,30',
+    '2024.02.01 00:00,101,103,100,102,20',
+  ].join('\n');
+  assert.throws(() => parseBybitMt4Klines15m(backward), /NON_ASCENDING_MT4_TIMESTAMP/);
 });
