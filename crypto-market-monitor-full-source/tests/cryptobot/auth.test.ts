@@ -48,32 +48,37 @@ test("valid token resolves a scoped CryptoBot principal", async () => {
 
 test("wrong issuer is rejected", async () => {
   const { publicKey, config, sign } = await setup();
-  await assert.rejects(() => verifyTokenWithKey(await sign({ iss: "https://evil.test" }), publicKey, config));
+  const token = await sign({ iss: "https://evil.test" });
+  await assert.rejects(() => verifyTokenWithKey(token, publicKey, config));
 });
 
 test("wrong audience is rejected", async () => {
   const { publicKey, config, sign } = await setup();
-  await assert.rejects(() => verifyTokenWithKey(await sign({ aud: "https://other.test" }), publicKey, config));
+  const token = await sign({ aud: "https://other.test" });
+  await assert.rejects(() => verifyTokenWithKey(token, publicKey, config));
 });
 
 test("expired token is rejected", async () => {
   const { publicKey, config, sign } = await setup();
   const past = Math.floor(Date.now() / 1000) - 60;
-  await assert.rejects(() => verifyTokenWithKey(await sign({ exp: past }), publicKey, config));
+  const token = await sign({ exp: past });
+  await assert.rejects(() => verifyTokenWithKey(token, publicKey, config));
 });
 
 test("disallowed subject is rejected", async () => {
   const { publicKey, config, sign } = await setup();
+  const token = await sign({ sub: "user:not-allowed" });
   await assert.rejects(
-    () => verifyTokenWithKey(await sign({ sub: "user:not-allowed" }), publicKey, config),
+    () => verifyTokenWithKey(token, publicKey, config),
     /principal_not_allowed/,
   );
 });
 
 test("missing required read scope is rejected", async () => {
   const { publicKey, config, sign } = await setup();
+  const token = await sign({ scope: "profile" });
   await assert.rejects(
-    () => verifyTokenWithKey(await sign({ scope: "profile" }), publicKey, config),
+    () => verifyTokenWithKey(token, publicKey, config),
     /insufficient_scope/,
   );
 });
