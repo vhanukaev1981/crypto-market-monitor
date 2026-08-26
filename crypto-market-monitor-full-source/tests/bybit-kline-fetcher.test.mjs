@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { fetchBybitKlines } from '../algo/bybit-kline-fetcher.mjs';
 
 function response(list) {
-  return { ok:true, json: async()=>({retCode:0,retMsg:'OK',result:{list}}) };
+  return { ok:true, status:200, json: async()=>({retCode:0,retMsg:'OK',result:{list}}) };
 }
 
 test('paginates backwards, deduplicates and returns ascending 1H candles', async () => {
@@ -19,8 +19,22 @@ test('paginates backwards, deduplicates and returns ascending 1H candles', async
   assert.deepEqual(out[0],{timeMs:1000,time:'1970-01-01T00:00:01.000Z',open:10,high:11,low:9,close:10.5,volume:1});
 });
 
+test('falls back from api.bybit.com to official api.bytick.com on HTTP 403', async () => {
+  const calls=[];
+  const fetchImpl=async url=>{
+    calls.push(String(url));
+    if (String(url).startsWith('https://api.bybit.com/')) return {ok:false,status:403,json:async()=>({})};
+    return response([['1000','10','11','9','10.5','1','0']]);
+  };
+  const out=await fetchBybitKlines({symbol:'BTCUSDT',startTime:1000,endTime:1000,fetchImpl,sleepMs:0});
+  assert.equal(out.length,1);
+  assert.equal(calls.length,2);
+  assert.match(calls[0],/^https:\/\/api\.bybit\.com\//);
+  assert.match(calls[1],/^https:\/\/api\.bytick\.com\//);
+});
+
 test('fails closed on Bybit API retCode errors', async () => {
-  const fetchImpl=async()=>({ok:true,json:async()=>({retCode:10001,retMsg:'bad',result:{list:[]}})});
+  const fetchImpl=async()=>({ok:true,status:200,json:async()=>({retCode:10001,retMsg:'bad',result:{list:[]}})});
   await assert.rejects(()=>fetchBybitKlines({symbol:'BTCUSDT',startTime:1000,endTime:3000,fetchImpl,sleepMs:0}),/BYBIT_API_ERROR/);
 });
 
