@@ -39,7 +39,22 @@ test('execution friction is explicitly accumulated by the harness', () => {
   assert.ok(costly.totalExecutionCosts > 0);
 });
 
-test('spot-only sizing never exceeds configured max position exposure', () => {
+test('spot-only sizing never exceeds configured max position exposure at ordinary risk sizing', () => {
   const r=runTrendPullbackBacktest({candles:makeTrend(7000), maxPositionPct:0.25});
   assert.ok(r.maxObservedExposurePct <= 25.000001);
+});
+
+test('hard exposure cap survives mark-to-market drift after a cap-sized entry', () => {
+  const candles=makeTrend(9000,{slope:0.04,wave:3.0,period:48});
+  const r=runTrendPullbackBacktest({
+    candles,
+    riskPct:0.10,
+    maxPositionPct:0.25,
+    spreadBps:2,
+    slippageBps:2,
+    feeBps:10,
+  });
+  assert.equal(r.status,'COMPLETED');
+  assert.ok(r.trades.length>0);
+  assert.ok(r.maxObservedExposurePct <= 25.000001, `observed ${r.maxObservedExposurePct}%`);
 });
