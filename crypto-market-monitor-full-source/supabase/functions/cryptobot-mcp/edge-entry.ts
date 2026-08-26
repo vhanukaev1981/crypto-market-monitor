@@ -25,7 +25,7 @@ const PROJECT_URL = (Deno.env.get("SUPABASE_URL") ?? "").replace(/\/$/, "");
 const MCP_URL = `${PROJECT_URL}/functions/v1/${FUNCTION_NAME}/mcp`;
 const RESOURCE_METADATA_URL = `${PROJECT_URL}/functions/v1/${FUNCTION_NAME}/.well-known/oauth-protected-resource`;
 const CONTROL_CENTER_URI = "ui://cryptobot/control-center/v1.html";
-const STANDARD_SCOPES = ["openid", "email"];
+const STANDARD_SCOPES = ["email"];
 const WIDGET_URL = "https://raw.githubusercontent.com/vhanukaev1981/crypto-market-monitor/2b20d9e3276c36643736eb3f2e7cfaad46f3ddc4/crypto-market-monitor-full-source/supabase/functions/cryptobot-mcp/widget.html";
 
 if (!PROJECT_URL) throw new Error("SUPABASE_URL_missing");
