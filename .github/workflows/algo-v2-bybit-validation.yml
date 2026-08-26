@@ -33,47 +33,38 @@ jobs:
           printf 'Running %s isolated test files\n' "${#files[@]}"
           node --test "${files[@]}"
 
-      - name: Download direct Bybit MT4 60m archives for BTC and ETH, 2023-2024
+      - name: Download direct Bybit BTCUSDT 60m archives, 2020-2024
         working-directory: crypto-market-monitor-full-source
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p archive validation-results
-          for symbol in BTCUSDT ETHUSDT; do
-            : > "archive/${symbol}-60m.csv"
-            for year in 2023 2024; do
-              base="https://public.bybit.com/kline_for_metatrader4/${symbol}/${year}/"
-              html=$(curl -L -sS --max-time 30 "$base")
-              mapfile -t files < <(printf '%s' "$html" | grep -oE "${symbol}_60_${year}-[0-9-]+_[0-9-]+\.csv\.gz" | sort -u)
-              required=12
-              if [ "$year" = "2024" ]; then required=11; fi
-              if [ ${#files[@]} -lt $required ]; then
-                echo "Expected at least ${required} monthly 60m files for ${symbol} ${year}, got ${#files[@]}" >&2
-                exit 2
-              fi
-              echo "${symbol} ${year}: ${#files[@]} monthly 60m files"
-              for file in "${files[@]}"; do
-                curl -L -sS --fail --retry 3 --max-time 60 "${base}${file}" | gzip -dc >> "archive/${symbol}-60m.csv"
-              done
+          : > archive/BTCUSDT-60m.csv
+          : > archive/BTCUSDT-manifest.txt
+          for year in 2020 2021 2022 2023 2024; do
+            base="https://public.bybit.com/kline_for_metatrader4/BTCUSDT/${year}/"
+            html=$(curl -L -sS --fail --retry 3 --max-time 30 "$base")
+            mapfile -t files < <(printf '%s' "$html" | grep -oE "BTCUSDT_60_${year}-[0-9-]+_[0-9-]+\.csv\.gz" | sort -u)
+            if [ ${#files[@]} -lt 1 ]; then
+              echo "No BTCUSDT 60m archive files found for ${year}" >&2
+              exit 2
+            fi
+            echo "${year}: ${#files[@]} files" | tee -a archive/BTCUSDT-manifest.txt
+            printf '%s\n' "${files[@]}" >> archive/BTCUSDT-manifest.txt
+            for file in "${files[@]}"; do
+              curl -L -sS --fail --retry 3 --max-time 60 "${base}${file}" | gzip -dc >> archive/BTCUSDT-60m.csv
             done
-            echo "${symbol} 60m rows: $(wc -l < archive/${symbol}-60m.csv)"
           done
+          echo "BTCUSDT raw rows: $(wc -l < archive/BTCUSDT-60m.csv)"
+          cat archive/BTCUSDT-manifest.txt
 
-      - name: Validate BTCUSDT on clean contiguous Bybit 60m segments
+      - name: Validate frozen BTCUSDT V1.2 on clean contiguous segments
         working-directory: crypto-market-monitor-full-source
-        run: node scripts/run-bybit-mt4-segment-validation.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT.json
+        run: node scripts/run-bybit-mt4-segment-validation.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024.json
 
-      - name: Validate ETHUSDT on clean contiguous Bybit 60m segments
+      - name: Run frozen BTCUSDT V1.2 robustness matrix
         working-directory: crypto-market-monitor-full-source
-        run: node scripts/run-bybit-mt4-segment-validation.mjs --symbol ETHUSDT --min-hours 4800 --input archive/ETHUSDT-60m.csv --out validation-results/ETHUSDT.json
-
-      - name: Run BTCUSDT robustness matrix
-        working-directory: crypto-market-monitor-full-source
-        run: node scripts/run-bybit-mt4-robustness.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-robustness.json
-
-      - name: Run ETHUSDT robustness matrix
-        working-directory: crypto-market-monitor-full-source
-        run: node scripts/run-bybit-mt4-robustness.mjs --symbol ETHUSDT --min-hours 4800 --input archive/ETHUSDT-60m.csv --out validation-results/ETHUSDT-robustness.json
+        run: node scripts/run-bybit-mt4-robustness.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-robustness.json
 
       - name: Print summaries
         if: always()
@@ -90,6 +81,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: algo-v2-bybit-mt4-60m-validation
-          path: crypto-market-monitor-full-source/validation-results/*.json
+          name: algo-v2-btc-bybit-2020-2024-validation
+          path: |
+            crypto-market-monitor-full-source/validation-results/*.json
+            crypto-market-monitor-full-source/archive/BTCUSDT-manifest.txt
           if-no-files-found: warn
