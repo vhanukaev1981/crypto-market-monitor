@@ -67,6 +67,14 @@ jobs:
         working-directory: crypto-market-monitor-full-source
         run: node scripts/run-bybit-mt4-segment-validation.mjs --symbol ETHUSDT --min-hours 4800 --input archive/ETHUSDT-60m.csv --out validation-results/ETHUSDT.json
 
+      - name: Run BTCUSDT robustness matrix
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/run-bybit-mt4-robustness.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-robustness.json
+
+      - name: Run ETHUSDT robustness matrix
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/run-bybit-mt4-robustness.mjs --symbol ETHUSDT --min-hours 4800 --input archive/ETHUSDT-60m.csv --out validation-results/ETHUSDT-robustness.json
+
       - name: Print summaries
         if: always()
         working-directory: crypto-market-monitor-full-source
@@ -82,6 +90,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: algo-v2-bybit-mt4-60m-segment-validation
+          name: algo-v2-bybit-mt4-60m-validation
           path: crypto-market-monitor-full-source/validation-results/*.json
           if-no-files-found: warn
