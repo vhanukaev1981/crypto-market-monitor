@@ -33,6 +33,19 @@ jobs:
           printf 'Running %s isolated test files\n' "${#files[@]}"
           node --test "${files[@]}"
 
+      - name: Probe official Bybit monthly archives
+        shell: bash
+        run: |
+          set +e
+          for url in \
+            https://public.bybit.com/spot/BTCUSDT/BTCUSDT-2025-01.csv.gz \
+            https://public.bybit.com/spot/ETHUSDT/ETHUSDT-2025-01.csv.gz
+          do
+            echo "===== $url ====="
+            curl -L -sS -I --max-time 20 "$url" | grep -Ei '^(HTTP/|content-length:|content-type:|last-modified:|etag:)' || true
+          done
+          exit 0
+
       - name: Create results directory
         working-directory: crypto-market-monitor-full-source
         run: mkdir -p validation-results
