@@ -51,5 +51,7 @@ jobs:
         run: npm ci --ignore-scripts
       - name: CryptoBot tests
         run: npm run test:cryptobot
-      - name: Existing safety tests
+      - name: Build existing app artifact
+        run: npm run build
+      - name: Existing repository tests
         run: node --test tests/*.test.mjs
