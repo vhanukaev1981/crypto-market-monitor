@@ -1,0 +1,92 @@
+name: ALGO V2 Cross Venue Validation
+
+on:
+  push:
+    branches:
+      - agent/algo-v2-core-v1
+    paths:
+      - .github/workflows/algo-v2-cross-validation.yml
+      - crypto-market-monitor-full-source/validation/cross-validation-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+
+      - name: Run isolated ALGO unit regression
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          mapfile -t files < <(find tests -maxdepth 1 -name '*.test.mjs' ! -name 'rendered-html.test.mjs' -print | sort)
+          printf 'Running %s isolated test files\n' "${#files[@]}"
+          node --test "${files[@]}"
+
+      - name: Probe Binance public market-data endpoint
+        shell: bash
+        run: |
+          curl -fsSL --max-time 20 'https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=1' | head -c 500
+          echo
+
+      - name: Create results directory
+        working-directory: crypto-market-monitor-full-source
+        run: mkdir -p validation-results
+
+      - name: Cross-validate BTCUSDT Spot 1H
+        working-directory: crypto-market-monitor-full-source
+        run: >-
+          node scripts/run-cross-venue-validation.mjs
+          --symbol BTCUSDT
+          --start 2023-01-01T00:00:00Z
+          --end 2026-08-25T23:00:00Z
+          --fee-bps 10
+          --spread-bps 2
+          --slippage-bps 2
+          --out validation-results/BTCUSDT-cross.json
+
+      - name: Cross-validate ETHUSDT Spot 1H
+        working-directory: crypto-market-monitor-full-source
+        run: >-
+          node scripts/run-cross-venue-validation.mjs
+          --symbol ETHUSDT
+          --start 2023-01-01T00:00:00Z
+          --end 2026-08-25T23:00:00Z
+          --fee-bps 10
+          --spread-bps 2
+          --slippage-bps 2
+          --out validation-results/ETHUSDT-cross.json
+
+      - name: Print summaries
+        if: always()
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(validation-results/*-cross.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo 'No cross-validation JSON files were produced.'
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "===== $f ====="
+            cat "$f"
+          done
+
+      - name: Upload cross-validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: algo-v2-cross-validation
+          path: crypto-market-monitor-full-source/validation-results/*-cross.json
+          if-no-files-found: warn
