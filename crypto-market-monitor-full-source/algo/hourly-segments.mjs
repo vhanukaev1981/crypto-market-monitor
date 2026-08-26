@@ -48,3 +48,16 @@ export function splitContiguousHourlySegments(candles) {
   segments.push(current);
   return segments;
 }
+
+export function selectEligibleHourlySegments(segments,{minHours=4800}={}) {
+  if (!Array.isArray(segments)) throw new Error('INVALID_SEGMENTS');
+  if (!Number.isInteger(minHours) || minHours < 1) throw new Error('INVALID_MIN_HOURS');
+  return segments.filter(segment => {
+    validateMonotonic(segment);
+    if (segment.length===0) return false;
+    for (let i=1;i<segment.length;i++) {
+      if (timestamp(segment[i])-timestamp(segment[i-1])!==HOUR_MS) throw new Error('NON_CONTIGUOUS_SEGMENT');
+    }
+    return segment.length >= minHours;
+  });
+}
