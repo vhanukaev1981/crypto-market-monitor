@@ -1,2 +1,2 @@
-run=29
-reason=GREEN signal funnel summarizer before harness integration
+run=30
+reason=RED harness signal funnel events before integration implementation
