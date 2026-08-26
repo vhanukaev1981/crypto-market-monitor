@@ -57,6 +57,7 @@ test('hard exposure controller trims mark-to-market drift above a separate emerg
   });
   assert.equal(r.status,'COMPLETED');
   assert.ok(r.trades.length>0);
+  assert.ok(r.maxObservedExposurePct > 1.01, `fixture peak exposure ${r.maxObservedExposurePct}% did not breach 1.01%`);
   assert.ok(Array.isArray(r.exposureControlEvents), 'expected exposure control events');
   assert.ok(r.exposureControlEvents.some(e=>e.decision==='REDUCE'), 'expected at least one hard-cap reduction');
   assert.ok(r.maxPostControlExposurePct <= 1.010001, `post-control exposure ${r.maxPostControlExposurePct}%`);
