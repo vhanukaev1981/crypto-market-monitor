@@ -1,2 +1,2 @@
-run=4
-reason=run frozen V1.2 Bybit-native 1H validation after harness and fetcher updates
+run=5
+reason=verify third official Bybit endpoint fallback and run frozen V1.2 1H validation
