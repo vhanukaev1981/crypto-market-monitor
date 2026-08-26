@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fetchBinanceSpotKlines } from '../algo/binance-kline-fetcher.mjs';
+import { repairMinorHourlyGaps } from '../algo/hourly-data-quality.mjs';
 import { runTrendPullbackBacktest } from '../algo/trend-pullback-backtest.mjs';
 
 function arg(name, fallback=null) {
@@ -13,9 +14,11 @@ const start=arg('start','2023-01-01T00:00:00Z');
 const end=arg('end','2026-08-25T23:00:00Z');
 const out=arg('out',null);
 const venue=arg('venue','BINANCE_PUBLIC_MARKET_DATA');
+const maxGapHours=Number(arg('max-gap-hours','3'));
 if (!symbol) throw new Error('MISSING_SYMBOL');
 const startTime=Date.parse(start), endTime=Date.parse(end);
 if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime < startTime) throw new Error('INVALID_DATE_RANGE');
+if (!Number.isInteger(maxGapHours) || maxGapHours < 0) throw new Error('INVALID_MAX_GAP_HOURS');
 
 const parameters={
   startingEquity:Number(arg('equity','100000')),
@@ -32,8 +35,9 @@ const parameters={
 };
 for (const [k,v] of Object.entries(parameters)) if (!Number.isFinite(v)) throw new Error(`INVALID_PARAMETER:${k}`);
 
-const candles=await fetchBinanceSpotKlines({symbol,startTime,endTime,interval:'1h'});
-const result=runTrendPullbackBacktest({candles,...parameters});
+const rawCandles=await fetchBinanceSpotKlines({symbol,startTime,endTime,interval:'1h'});
+const quality=repairMinorHourlyGaps(rawCandles,{maxGapHours});
+const result=runTrendPullbackBacktest({candles:quality.candles,...parameters});
 const riskCounts={};
 for (const e of result.riskEvents ?? []) riskCounts[e.reasonCode]=(riskCounts[e.reasonCode]??0)+1;
 const summary={
@@ -42,7 +46,15 @@ const summary={
   venue,
   symbol,
   requestedRange:{start:new Date(startTime).toISOString(),end:new Date(endTime).toISOString()},
-  data:{candles:candles.length,first:candles[0]?.time??null,last:candles.at(-1)?.time??null},
+  data:{
+    rawCandles:rawCandles.length,
+    candlesAfterQualityRepair:quality.candles.length,
+    syntheticHoursFilled:quality.gapsFilled,
+    gapEvents:quality.gapEvents,
+    maxGapHours,
+    first:quality.candles[0]?.time??null,
+    last:quality.candles.at(-1)?.time??null,
+  },
   parameters,
   status:result.status,
   metrics:result.metrics??null,
