@@ -364,7 +364,20 @@ For production/internal use:
 
 The existing `app/chatgpt-auth.ts` may be reusable for the Sites surface but must not be assumed to satisfy MCP authorization until verified against the current plugin authentication contract.
 
-### 11.3 Secrets
+### 11.3 Bybit credential boundary
+
+Personal-account reads are restricted to the existing read-only Bybit credential pair:
+
+- `BYBIT_LIVE_API_KEY`
+- `BYBIT_LIVE_API_SECRET`
+
+The ChatGPT Control Center must not use `BYBIT_LIVE_TRADE_*`, `BYBIT_DEMO_*`, or any alternative Bybit credential for personal-account reads.
+
+Where possible, V1 consumes the already-normalized Supabase snapshot rather than calling Bybit directly. If a server-side refresh of the personal account is required, it must go through the approved read-only snapshot path and preserve the global read-only validation.
+
+V1 never introduces, requests or consumes a write-capable personal Bybit key.
+
+### 11.4 Secrets
 
 Never expose:
 
@@ -378,7 +391,7 @@ Secrets remain server-side.
 
 The ChatGPT widget receives only normalized data required for display.
 
-### 11.4 Supabase access
+### 11.5 Supabase access
 
 The Data Gateway owns database access.
 
@@ -386,7 +399,7 @@ If a privileged server credential is used, all queries must be explicitly scoped
 
 No service-role credential may reach client-side code.
 
-### 11.5 Tool output privacy
+### 11.6 Tool output privacy
 
 `structuredContent`, text content and `_meta` must contain no secret or unnecessary sensitive infrastructure data.
 
@@ -534,6 +547,7 @@ V1 is accepted only when all are true:
 12. Widget state survives routine data refreshes without unnecessary full re-render.
 13. Mobile layout is usable without requiring a separate external app.
 14. Dashboard availability is not required for AlgoBot 24/7 operation.
+15. Personal-account Bybit reads use only the approved read-only credential pair and never any trade/demo credential set.
 
 ## 18. Non-goals for V1
 
