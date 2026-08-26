@@ -1,2 +1,2 @@
-run=25
-reason=RED test for auditable trade attribution summaries by year and regime
+run=26
+reason=GREEN verification for auditable trade attribution summaries by year and regime
