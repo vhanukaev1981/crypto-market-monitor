@@ -1,0 +1,85 @@
+name: ALGO V2 Bybit Spot Research
+
+on:
+  push:
+    branches:
+      - agent/algo-v2-core-v1
+    paths:
+      - '.github/workflows/algo-v2-bybit-spot-research.yml'
+      - 'crypto-market-monitor-full-source/algo/bybit-trade-stream-import.mjs'
+      - 'crypto-market-monitor-full-source/algo/bybit-spot-archive.mjs'
+      - 'crypto-market-monitor-full-source/algo/spot-research-window.mjs'
+      - 'crypto-market-monitor-full-source/algo/trend-pullback-backtest.mjs'
+      - 'crypto-market-monitor-full-source/algo/structural-trade-annotation.mjs'
+      - 'crypto-market-monitor-full-source/algo/structural-bucket-attribution.mjs'
+      - 'crypto-market-monitor-full-source/tests/**'
+      - 'crypto-market-monitor-full-source/scripts/run-bybit-spot-research.mjs'
+      - 'crypto-market-monitor-full-source/validation/SOURCE_PROVENANCE.md'
+      - 'crypto-market-monitor-full-source/validation/bybit-spot-research-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spot-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+
+      - name: Run isolated ALGO unit regression
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          mapfile -t files < <(find tests -maxdepth 1 -name '*.test.mjs' ! -name 'rendered-html.test.mjs' -print | sort)
+          printf 'Running %s isolated test files\n' "${#files[@]}"
+          node --test "${files[@]}"
+
+      - name: Run canonical BTCUSDT Spot research with OOS lock
+        working-directory: crypto-market-monitor-full-source
+        run: >-
+          node scripts/run-bybit-spot-research.mjs
+          --symbol BTCUSDT
+          --start-month 2022-11
+          --end-month 2024-12
+          --max-compressed-gb 20
+          --out validation-results/BTCUSDT-SPOT-2022-11-to-2024-12.json
+
+      - name: Verify OOS lock is active
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          set +e
+          output=$(node scripts/run-bybit-spot-research.mjs --symbol BTCUSDT --start-month 2022-11 --end-month 2025-01 --out /tmp/must-not-exist.json 2>&1)
+          status=$?
+          set -e
+          echo "$output"
+          test $status -ne 0
+          echo "$output" | grep -q 'OOS_WINDOW_LOCKED'
+          test ! -e /tmp/must-not-exist.json
+
+      - name: Print Spot research summary
+        if: always()
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for f in validation-results/*.json; do
+            echo "===== $f ====="
+            cat "$f"
+          done
+
+      - name: Upload Spot research artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: algo-v2-btc-bybit-spot-research
+          path: crypto-market-monitor-full-source/validation-results/*.json
+          if-no-files-found: warn
