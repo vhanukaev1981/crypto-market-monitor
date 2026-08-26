@@ -1,6 +1,6 @@
 const SYMBOL_RE = /^[A-Z0-9]{3,20}$/;
 const INTERVAL_RE = /^(1|3|5|15|30|60|120|240|360|720|D|W|M)$/;
-const DEFAULT_BASE_URLS = ['https://api.bybit.com', 'https://api.bytick.com'];
+const DEFAULT_BASE_URLS = ['https://api.bybit.com', 'https://api.bytick.com', 'https://api.bybitglobal.com'];
 
 function sleep(ms) {
   return ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : Promise.resolve();
