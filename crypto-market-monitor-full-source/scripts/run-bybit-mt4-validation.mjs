@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { parseBybitMt4Klines15m, aggregate15mTo1h } from '../algo/bybit-mt4-kline-importer.mjs';
+import { prepareBybitMt4Hourly } from '../algo/bybit-mt4-validation-data.mjs';
 import { runTrendPullbackBacktest } from '../algo/trend-pullback-backtest.mjs';
 
 function arg(name, fallback=null) {
@@ -10,10 +10,11 @@ function arg(name, fallback=null) {
 const symbol=arg('symbol');
 const input=arg('input');
 const out=arg('out');
+const maxGapHours=Number(arg('max-gap-hours','3'));
 if (!symbol || !input) throw new Error('MISSING_REQUIRED_ARGUMENT');
 const text=await fs.readFile(input,'utf8');
-const candles15m=parseBybitMt4Klines15m(text);
-const candles=aggregate15mTo1h(candles15m);
+const prepared=prepareBybitMt4Hourly(text,{maxGapHours});
+const candles=prepared.candles;
 const result=runTrendPullbackBacktest({
   candles,
   startingEquity:100000,
@@ -30,8 +31,16 @@ const result=runTrendPullbackBacktest({
 const summary={
   engine:'ALGO_V2_BYBIT_MT4_ARCHIVE_V1_2',
   symbol,
-  data:{candles15m:candles15m.length,candles1h:candles.length,first:candles[0]?.time??null,last:candles.at(-1)?.time??null},
-  parameters:{startingEquity:100000,riskPct:0.0035,maxPositionPct:0.25,atrStopMult:1.5,trailAtrMult:2,spreadBps:2,slippageBps:2,feeBps:10},
+  data:{
+    candles15m:prepared.raw15mCount,
+    nativeCandles1h:prepared.native1hCount,
+    candles1h:candles.length,
+    syntheticGapHours:prepared.gapsFilled,
+    gapEvents:prepared.gapEvents,
+    first:candles[0]?.time??null,
+    last:candles.at(-1)?.time??null,
+  },
+  parameters:{startingEquity:100000,riskPct:0.0035,maxPositionPct:0.25,atrStopMult:1.5,trailAtrMult:2,spreadBps:2,slippageBps:2,feeBps:10,maxGapHours},
   status:result.status,
   metrics:result.metrics??null,
   totalExecutionCosts:result.totalExecutionCosts??0,
