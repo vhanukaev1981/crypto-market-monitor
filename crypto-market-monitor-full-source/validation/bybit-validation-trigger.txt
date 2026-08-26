@@ -1,2 +1,2 @@
-run=33
-reason=verify structural persistence entry metadata RED before implementation
+run=34
+reason=validate post-run structural persistence annotation and alpha fold analysis on latest HEAD
