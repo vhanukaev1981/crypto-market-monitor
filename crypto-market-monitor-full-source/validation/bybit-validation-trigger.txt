@@ -1,2 +1,2 @@
-run=9
-reason=RED test for MT4 hourly preparation and bounded gap repair
+run=10
+reason=GREEN MT4 preparation regression and BTC/ETH validation with max 3-hour conservative gap repair
