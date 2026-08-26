@@ -1,2 +1,2 @@
-run=27
-reason=GREEN reverification after floating point assertion correction in trade attribution tests
+run=28
+reason=RED signal funnel test before implementation
