@@ -33,67 +33,19 @@ jobs:
           printf 'Running %s isolated test files\n' "${#files[@]}"
           node --test "${files[@]}"
 
-      - name: Probe official Bybit monthly archives
+      - name: Probe official Bybit MT4 kline archive format
         shell: bash
         run: |
-          set +e
-          for url in \
-            https://public.bybit.com/spot/BTCUSDT/BTCUSDT-2025-01.csv.gz \
-            https://public.bybit.com/spot/ETHUSDT/ETHUSDT-2025-01.csv.gz
-          do
-            echo "===== $url ====="
-            curl -L -sS -I --max-time 20 "$url" | grep -Ei '^(HTTP/|content-length:|content-type:|last-modified:|etag:)' || true
-          done
-          exit 0
+          set -euo pipefail
+          url='https://public.bybit.com/kline_for_metatrader4/BTCUSDT/2024/BTCUSDT_15_2024-01-01_2024-01-31.csv.gz'
+          echo "===== HEADERS ====="
+          curl -L -sS -I --max-time 20 "$url" | grep -Ei '^(HTTP/|content-length:|content-type:|last-modified:|etag:)' || true
+          echo "===== FIRST 5 ROWS ====="
+          curl -L -sS --max-time 120 "$url" | gzip -dc | head -5
 
-      - name: Create results directory
-        working-directory: crypto-market-monitor-full-source
-        run: mkdir -p validation-results
-
-      - name: Validate BTCUSDT on Bybit Spot 1H
-        working-directory: crypto-market-monitor-full-source
-        run: >-
-          node scripts/run-bybit-validation.mjs
-          --symbol BTCUSDT
-          --start 2023-01-01T00:00:00Z
-          --end 2026-08-25T23:00:00Z
-          --fee-bps 10
-          --spread-bps 2
-          --slippage-bps 2
-          --out validation-results/BTCUSDT.json
-
-      - name: Validate ETHUSDT on Bybit Spot 1H
-        working-directory: crypto-market-monitor-full-source
-        run: >-
-          node scripts/run-bybit-validation.mjs
-          --symbol ETHUSDT
-          --start 2023-01-01T00:00:00Z
-          --end 2026-08-25T23:00:00Z
-          --fee-bps 10
-          --spread-bps 2
-          --slippage-bps 2
-          --out validation-results/ETHUSDT.json
-
-      - name: Print summaries
-        if: always()
-        working-directory: crypto-market-monitor-full-source
+      - name: Probe ETH MT4 archive availability
         shell: bash
         run: |
-          shopt -s nullglob
-          files=(validation-results/*.json)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo 'No validation JSON files were produced.'
-            exit 0
-          fi
-          for f in "${files[@]}"; do
-            echo "===== $f ====="
-            cat "$f"
-          done
-
-      - name: Upload validation results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: algo-v2-bybit-validation
-          path: crypto-market-monitor-full-source/validation-results/*.json
-          if-no-files-found: warn
+          set -euo pipefail
+          url='https://public.bybit.com/kline_for_metatrader4/ETHUSDT/2024/ETHUSDT_15_2024-01-01_2024-01-31.csv.gz'
+          curl -L -sS -I --max-time 20 "$url" | grep -Ei '^(HTTP/|content-length:|content-type:|last-modified:|etag:)' || true
