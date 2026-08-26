@@ -20,7 +20,7 @@ const expectedNames = [
   "explain_decision",
 ];
 
-test("V1 advertises only the approved read-only tool set", () => {
+test("V1 advertises only the approved read-only tool set with Supabase-supported OAuth scope", () => {
   assert.deepEqual(CRYPTOBOT_TOOL_SPECS.map((tool) => tool.name), expectedNames);
   assert.deepEqual(READ_ONLY_ANNOTATIONS, {
     readOnlyHint: true,
@@ -28,7 +28,7 @@ test("V1 advertises only the approved read-only tool set", () => {
     openWorldHint: false,
     idempotentHint: true,
   });
-  assert.deepEqual(oauthSecuritySchemes(), [{ type: "oauth2", scopes: ["cryptobot.read"] }]);
+  assert.deepEqual(oauthSecuritySchemes(), [{ type: "oauth2", scopes: ["email"] }]);
 });
 
 test("only open_control_center is allowed to render the widget", () => {
