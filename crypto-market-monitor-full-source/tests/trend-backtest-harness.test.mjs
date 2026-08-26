@@ -39,22 +39,25 @@ test('execution friction is explicitly accumulated by the harness', () => {
   assert.ok(costly.totalExecutionCosts > 0);
 });
 
-test('spot-only sizing never exceeds configured max position exposure at ordinary risk sizing', () => {
+test('spot-only entry allocation never exceeds configured entry cap at ordinary risk sizing', () => {
   const r=runTrendPullbackBacktest({candles:makeTrend(7000), maxPositionPct:0.25});
   assert.ok(r.maxObservedExposurePct <= 25.000001);
 });
 
-test('hard exposure cap survives mark-to-market drift after a cap-sized entry', () => {
+test('hard exposure controller trims mark-to-market drift above a separate emergency cap', () => {
   const candles=makeTrend(9000,{slope:0.04,wave:3.0,period:48});
   const r=runTrendPullbackBacktest({
     candles,
     riskPct:0.10,
-    maxPositionPct:0.25,
+    maxPositionPct:0.01,
+    hardExposurePct:0.0101,
     spreadBps:2,
     slippageBps:2,
     feeBps:10,
   });
   assert.equal(r.status,'COMPLETED');
   assert.ok(r.trades.length>0);
-  assert.ok(r.maxObservedExposurePct <= 25.000001, `observed ${r.maxObservedExposurePct}%`);
+  assert.ok(Array.isArray(r.exposureControlEvents), 'expected exposure control events');
+  assert.ok(r.exposureControlEvents.some(e=>e.decision==='REDUCE'), 'expected at least one hard-cap reduction');
+  assert.ok(r.maxPostControlExposurePct <= 1.010001, `post-control exposure ${r.maxPostControlExposurePct}%`);
 });
