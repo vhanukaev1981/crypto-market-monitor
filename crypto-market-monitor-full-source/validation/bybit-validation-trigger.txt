@@ -1,2 +1,2 @@
-run=5
-reason=verify third official Bybit endpoint fallback and run frozen V1.2 1H validation
+run=6
+reason=RED test for Bybit MT4 15m importer before implementation
