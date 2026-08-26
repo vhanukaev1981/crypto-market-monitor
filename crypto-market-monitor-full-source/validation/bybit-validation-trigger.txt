@@ -1,2 +1,2 @@
-run=20
-reason=RED unit test for deterministic hard exposure partial trim accounting
+run=21
+reason=verify deterministic hard exposure partial trim accounting helper before harness refactor
