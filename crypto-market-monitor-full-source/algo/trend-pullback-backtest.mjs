@@ -2,7 +2,8 @@ import { aggregateCompletedCandles } from './mtf-aggregation.mjs';
 import { emaSeries, smaSeries, atrSeries, rsiSeries, adxSeries } from './indicators.mjs';
 import { detectRegime } from './regime-detector.mjs';
 import { evaluateTrendPullback } from './trend-pullback.mjs';
-import { evaluateRisk, evaluateExposureControl } from './risk-engine.mjs';
+import { evaluateRisk } from './risk-engine.mjs';
+import { applyHardExposureTrim } from './exposure-trim.mjs';
 import { estimateMarketFill } from './execution-costs.mjs';
 import { calculatePerformance } from './backtest-metrics.mjs';
 
@@ -66,31 +67,26 @@ export function runTrendPullbackBacktest({
     }
 
     if (position) {
-      const positionValue=position.qty*c.close;
-      const exposureControl=evaluateExposureControl({portfolioEquity:markEquity,positionValue,entryAllocationCapPct:maxPositionPct*100,hardExposureCapPct:hardExposurePct*100});
-      if (exposureControl.decision==='REDUCE') {
-        const unitSell=estimateMarketFill({side:'SELL',referencePrice:c.close,qty:1,spreadBps,slippageBps,feeBps});
-        const sellFrictionPerUnit=c.close-unitSell.cashDelta;
-        const denominator=c.close-hardExposurePct*sellFrictionPerUnit;
-        const trimQty=Math.min(position.qty,Math.max(0,exposureControl.reduceNotional/denominator));
-        if (trimQty>0) {
-          const qtyBefore=position.qty;
-          const proportionalCost=position.totalCost*(trimQty/qtyBefore);
-          const fill=estimateMarketFill({side:'SELL',referencePrice:c.close,qty:trimQty,spreadBps,slippageBps,feeBps});
-          totalExecutionCosts += trimQty*(c.close-fill.price)+fill.fee;
-          cash += fill.cashDelta;
-          const pnl=fill.cashDelta-proportionalCost;
-          position.qty-=trimQty;
-          position.totalCost-=proportionalCost;
-          trades.push({entryTime:position.entryTime,exitTime:c.time,entryPrice:position.entryPrice,exitPrice:fill.price,qty:trimQty,pnl,exitReason:'HARD_EXPOSURE_TRIM',entryScore:position.entryScore});
-          const postEquity=cash+position.qty*c.close;
-          const postExposurePct=postEquity>0?(position.qty*c.close/postEquity)*100:Infinity;
-          exposureControlEvents.push({time:c.time,decision:'REDUCE',reasonCode:exposureControl.reasonCode,exposurePctBefore:exposureControl.exposurePct,postExposurePct,trimQty,reduceNotional:trimQty*c.close});
-        }
+      const trim=applyHardExposureTrim({
+        time:c.time,
+        cash,
+        position,
+        referencePrice:c.close,
+        entryAllocationCapPct:maxPositionPct*100,
+        hardExposureCapPct:hardExposurePct*100,
+        spreadBps,
+        slippageBps,
+        feeBps,
+      });
+      cash=trim.cash;
+      position=trim.position;
+      if (trim.action==='REDUCE') {
+        totalExecutionCosts+=trim.executionCost;
+        trades.push(trim.trade);
+        exposureControlEvents.push(trim.event);
       }
+      maxPostControlExposurePct=Math.max(maxPostControlExposurePct,trim.postExposurePct);
 
-      const controlledEquity=cash+position.qty*c.close;
-      maxPostControlExposurePct=Math.max(maxPostControlExposurePct,(position.qty*c.close/controlledEquity)*100);
       position.trailingStop=Math.max(position.trailingStop,c.close-trailAtrMult*atr[i]);
       const exitReason=c.close<ema50[i]?'TREND_INVALIDATION':(c.close<=position.trailingStop?'TRAILING_STOP':null);
       if (exitReason) {
