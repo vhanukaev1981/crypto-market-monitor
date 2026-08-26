@@ -1,2 +1,2 @@
-run=10
-reason=GREEN MT4 preparation regression and BTC/ETH validation with max 3-hour conservative gap repair
+run=11
+reason=RED test for direct official Bybit MT4 60m validation path
