@@ -1,2 +1,2 @@
-run=6
-reason=RED test for Bybit MT4 15m importer before implementation
+run=7
+reason=RED test for safe duplicate boundary handling in Bybit MT4 importer
