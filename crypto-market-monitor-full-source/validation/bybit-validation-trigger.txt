@@ -1,2 +1,2 @@
-run=18
-reason=GREEN integration verification for emergency hard exposure trim above separate entry allocation cap
+run=19
+reason=diagnose pre-control peak exposure in synthetic hard-cap integration fixture
