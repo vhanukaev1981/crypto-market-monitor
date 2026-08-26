@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateRisk } from '../algo/risk-engine.mjs';
+import * as riskEngine from '../algo/risk-engine.mjs';
+
+const { evaluateRisk } = riskEngine;
 
 test('rejects trade when daily loss exceeds limit', () => {
   const result = evaluateRisk({
@@ -93,4 +95,29 @@ test('reduces size by half when drawdown is between 3.5% and 5%', () => {
   assert.equal(result.decision, 'REDUCED_SIZE');
   assert.equal(result.approvedNotional, 100);
   assert.equal(result.reasonCode, 'RISK_011_DRAWDOWN_REDUCTION');
+});
+
+test('two-tier exposure control allows mark-to-market drift above entry cap but trims only above hard cap', () => {
+  assert.equal(typeof riskEngine.evaluateExposureControl, 'function');
+
+  const drift = riskEngine.evaluateExposureControl({
+    portfolioEquity: 102753.2551788511,
+    positionValue: 27777.627880894986,
+    entryAllocationCapPct: 25,
+    hardExposureCapPct: 30,
+  });
+  assert.equal(drift.decision, 'HOLD');
+  assert.equal(drift.reasonCode, 'RISK_EXPOSURE_DRIFT_WITHIN_HARD_CAP');
+  assert.equal(drift.targetPositionValue, 27777.627880894986);
+
+  const breach = riskEngine.evaluateExposureControl({
+    portfolioEquity: 100000,
+    positionValue: 31000,
+    entryAllocationCapPct: 25,
+    hardExposureCapPct: 30,
+  });
+  assert.equal(breach.decision, 'REDUCE');
+  assert.equal(breach.reasonCode, 'RISK_HARD_EXPOSURE_CAP');
+  assert.equal(breach.targetPositionValue, 30000);
+  assert.equal(breach.reduceNotional, 1000);
 });
