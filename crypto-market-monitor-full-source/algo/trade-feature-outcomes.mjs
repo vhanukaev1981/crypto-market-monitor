@@ -2,7 +2,9 @@ const FEATURES=[
   'entryAtrPct','entryAdx14','entryRsi14','entryPullbackDepthPct',
   'entryEma20SlopePct','entryEma50SlopePct','entryDistanceToEma20Atr',
   'entryDistanceToEma50Atr','entryEfficiency24','entryEfficiency72',
-  'entryEma20PositiveSlopeShare24','entryAdxDelta12','holdingHours',
+  'entryEma20PositiveSlopeShare24','entryAdxDelta12',
+  'entry4hTrendAgeBars','entry4hTransitionCount12','entry4hEmaSpreadPct',
+  'entry1dDistanceAboveEma200Pct','holdingHours',
 ];
 
 function percentile(sorted,p){
