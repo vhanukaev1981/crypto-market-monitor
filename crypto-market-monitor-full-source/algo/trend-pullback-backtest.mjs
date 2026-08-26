@@ -21,6 +21,11 @@ function entryMetadata(position) {
     entryAtrPct: position.entryAtrPct,
     entryAdx14: position.entryAdx14,
     entryRsi14: position.entryRsi14,
+    entryPullbackDepthPct: position.entryPullbackDepthPct,
+    entryEma20SlopePct: position.entryEma20SlopePct,
+    entryEma50SlopePct: position.entryEma50SlopePct,
+    entryDistanceToEma20Atr: position.entryDistanceToEma20Atr,
+    entryDistanceToEma50Atr: position.entryDistanceToEma50Atr,
   };
 }
 
@@ -114,7 +119,8 @@ export function runTrendPullbackBacktest({
         totalExecutionCosts += position.qty * (c.close - fill.price) + fill.fee;
         cash += fill.cashDelta;
         const pnl=fill.cashDelta-position.totalCost;
-        trades.push({entryTime:position.entryTime,exitTime:c.time,entryPrice:position.entryPrice,exitPrice:fill.price,qty:position.qty,pnl,exitReason,entryScore:position.entryScore,...entryMetadata(position)});
+        const holdingHours=Math.max(0,(Date.parse(c.time)-Date.parse(position.entryTime))/3600000);
+        trades.push({entryTime:position.entryTime,exitTime:c.time,entryPrice:position.entryPrice,exitPrice:fill.price,qty:position.qty,pnl,exitReason,entryScore:position.entryScore,holdingHours,...entryMetadata(position)});
         position=null;
       }
       equityCurve.push(cash+(position?position.qty*c.close:0));
@@ -131,13 +137,15 @@ export function runTrendPullbackBacktest({
     const confirmation4h=(hf.close>hf.e50 && hf.e20>hf.e50)?'TREND_UP':((hf.close<hf.e50 && hf.e20<hf.e50)?'TREND_DOWN':'NEUTRAL');
     const structural1d=df.close>df.e200?'TREND_UP':'TREND_DOWN';
     const atrPct=atr[i]/c.close*100;
-    const regime=detectRegime({price:c.close,ema20:ema20[i],ema50:ema50[i],ema200:ema200[i],ema20Slope:ema20[i]-ema20[i-1],ema50Slope:ema50[i]-ema50[i-1],adx14:adx[i],atrPct});
+    const ema20Slope=ema20[i]-ema20[i-1];
+    const ema50Slope=ema50[i]-ema50[i-1];
+    const regime=detectRegime({price:c.close,ema20:ema20[i],ema50:ema50[i],ema200:ema200[i],ema20Slope,ema50Slope,adx14:adx[i],atrPct});
     const lookbackStart=Math.max(0,i-pullbackLookback+1);
     const recentHigh=Math.max(...rows.slice(lookbackStart,i+1).map(x=>x.high));
     const pullbackDepthPct=((recentHigh-c.close)/recentHigh)*100;
     const signal=evaluateTrendPullback({
       regime:regime.regime, regimeConfidence:regime.confidence, structural1d, confirmation4h, dataHealth:'GREEN', riskHealth:'GREEN',
-      price:c.close, ema20:ema20[i], ema50:ema50[i], ema200:ema200[i], ema20Slope:ema20[i]-ema20[i-1], ema50Slope:ema50[i]-ema50[i-1], adx14:adx[i], atr:atr[i], rsi14:rsi[i], pullbackDepthPct,
+      price:c.close, ema20:ema20[i], ema50:ema50[i], ema200:ema200[i], ema20Slope, ema50Slope, adx14:adx[i], atr:atr[i], rsi14:rsi[i], pullbackDepthPct,
       previousClose:rows[i-1].close,candleHigh:c.high,candleLow:c.low,candleClose:c.close,volume:c.volume,volume20Avg:vol20[i],spreadBps,maxSpreadBps,estimatedSlippageBps:slippageBps,maxSlippageBps,
     });
     signalFunnelEvents.push({
@@ -204,6 +212,11 @@ export function runTrendPullbackBacktest({
       entryAtrPct:atrPct,
       entryAdx14:adx[i],
       entryRsi14:rsi[i],
+      entryPullbackDepthPct:pullbackDepthPct,
+      entryEma20SlopePct:ema20[i]!==0?ema20Slope/ema20[i]*100:0,
+      entryEma50SlopePct:ema50[i]!==0?ema50Slope/ema50[i]*100:0,
+      entryDistanceToEma20Atr:atr[i]!==0?(c.close-ema20[i])/atr[i]:0,
+      entryDistanceToEma50Atr:atr[i]!==0?(c.close-ema50[i])/atr[i]:0,
     };
     const eqAfter=cash+position.qty*c.close;
     const entryExposurePct=(position.qty*c.close/eqAfter)*100;
