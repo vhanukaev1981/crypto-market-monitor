@@ -1,0 +1,2 @@
+run=3
+reason=verify official api.bytick.com fallback after api.bybit.com HTTP 403
