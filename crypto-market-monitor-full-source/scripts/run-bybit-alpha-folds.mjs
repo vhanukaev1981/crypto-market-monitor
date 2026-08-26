@@ -4,6 +4,7 @@ import { findHourlyGaps, splitContiguousHourlySegments, selectEligibleHourlySegm
 import { runTrendPullbackBacktest } from '../algo/trend-pullback-backtest.mjs';
 import { summarizeRiskDecisions } from '../algo/risk-decision-attribution.mjs';
 import { summarizeTradeAttribution } from '../algo/trade-attribution.mjs';
+import { summarizeTradeFeatureOutcomes } from '../algo/trade-feature-outcomes.mjs';
 
 function arg(name, fallback=null) {
   const i=process.argv.indexOf(`--${name}`);
@@ -55,7 +56,6 @@ for (const segment of eligible) {
     const start=Date.UTC(year,0,1);
     if (start>=firstMs && start<=lastMs) foldYears.push(year);
   }
-  // If a segment itself starts late in a year after a large archive gap, its start is a natural clean-state fold.
   if (!foldYears.length || firstYear===lastYear) foldYears.unshift(null);
 
   for (const year of foldYears) {
@@ -64,6 +64,7 @@ for (const segment of eligible) {
     if (result.status!=='COMPLETED') throw new Error(`FOLD_BACKTEST_${result.status}`);
     const risk=summarizeRiskDecisions(result.riskEvents);
     const attribution=summarizeTradeAttribution(result.trades);
+    const featureOutcomes=summarizeTradeFeatureOutcomes(result.trades);
     const firstHalt=result.riskEvents.find(e=>e.reasonCode==='RISK_003_MAX_DRAWDOWN') ?? null;
     folds.push({
       segmentIndex,
@@ -89,6 +90,7 @@ for (const segment of eligible) {
       } : null,
       risk,
       attribution,
+      featureOutcomes,
     });
   }
 }
