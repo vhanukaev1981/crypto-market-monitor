@@ -1,2 +1,2 @@
-run=12
-reason=RED test for exact hourly gap diagnostics and contiguous segment splitting
+run=13
+reason=RED test for minimum 4800-hour contiguous segment eligibility gate
