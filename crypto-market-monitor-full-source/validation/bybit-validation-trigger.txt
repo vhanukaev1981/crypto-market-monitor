@@ -1,2 +1,2 @@
-run=24
-reason=GREEN verification for trade entry regime metadata attribution
+run=25
+reason=RED test for auditable trade attribution summaries by year and regime
