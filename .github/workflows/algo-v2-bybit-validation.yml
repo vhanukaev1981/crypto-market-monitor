@@ -33,19 +33,53 @@ jobs:
           printf 'Running %s isolated test files\n' "${#files[@]}"
           node --test "${files[@]}"
 
-      - name: Probe official Bybit MT4 kline archive format
+      - name: Download Bybit MT4 15m archives for BTC and ETH, 2023-2024
+        working-directory: crypto-market-monitor-full-source
         shell: bash
         run: |
           set -euo pipefail
-          url='https://public.bybit.com/kline_for_metatrader4/BTCUSDT/2024/BTCUSDT_15_2024-01-01_2024-01-31.csv.gz'
-          echo "===== HEADERS ====="
-          curl -L -sS -I --max-time 20 "$url" | grep -Ei '^(HTTP/|content-length:|content-type:|last-modified:|etag:)' || true
-          echo "===== FIRST 5 ROWS ====="
-          curl -L -sS --max-time 120 "$url" | gzip -dc | head -5
+          mkdir -p archive validation-results
+          for symbol in BTCUSDT ETHUSDT; do
+            : > "archive/${symbol}-15m.csv"
+            for year in 2023 2024; do
+              base="https://public.bybit.com/kline_for_metatrader4/${symbol}/${year}/"
+              html=$(curl -L -sS --max-time 30 "$base")
+              mapfile -t files < <(printf '%s' "$html" | grep -oE "${symbol}_15_${year}-[0-9-]+_[0-9-]+\.csv\.gz" | sort -u)
+              if [ ${#files[@]} -lt 12 ]; then
+                echo "Expected at least 12 monthly files for ${symbol} ${year}, got ${#files[@]}" >&2
+                exit 2
+              fi
+              for file in "${files[@]}"; do
+                echo "Downloading ${file}"
+                curl -L -sS --fail --retry 3 --max-time 60 "${base}${file}" | gzip -dc >> "archive/${symbol}-15m.csv"
+              done
+            done
+            echo "${symbol} rows: $(wc -l < archive/${symbol}-15m.csv)"
+          done
 
-      - name: Probe ETH MT4 archive availability
+      - name: Validate BTCUSDT on Bybit archive 1H
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/run-bybit-mt4-validation.mjs --symbol BTCUSDT --input archive/BTCUSDT-15m.csv --out validation-results/BTCUSDT.json
+
+      - name: Validate ETHUSDT on Bybit archive 1H
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/run-bybit-mt4-validation.mjs --symbol ETHUSDT --input archive/ETHUSDT-15m.csv --out validation-results/ETHUSDT.json
+
+      - name: Print summaries
+        if: always()
+        working-directory: crypto-market-monitor-full-source
         shell: bash
         run: |
-          set -euo pipefail
-          url='https://public.bybit.com/kline_for_metatrader4/ETHUSDT/2024/ETHUSDT_15_2024-01-01_2024-01-31.csv.gz'
-          curl -L -sS -I --max-time 20 "$url" | grep -Ei '^(HTTP/|content-length:|content-type:|last-modified:|etag:)' || true
+          shopt -s nullglob
+          for f in validation-results/*.json; do
+            echo "===== $f ====="
+            cat "$f"
+          done
+
+      - name: Upload validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: algo-v2-bybit-mt4-validation
+          path: crypto-market-monitor-full-source/validation-results/*.json
+          if-no-files-found: warn
