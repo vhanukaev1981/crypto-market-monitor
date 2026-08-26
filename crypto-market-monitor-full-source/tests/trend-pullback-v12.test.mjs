@@ -31,3 +31,9 @@ test('4H TREND_DOWN still blocks entries', () => {
   assert.equal(r.action, 'NO_TRADE');
   assert.equal(r.reason, 'TREND_CONFIRMATION_FAILED');
 });
+
+test('V1.2 keeps volume as a hard gate', () => {
+  const r = evaluateTrendPullback(base({ volume:50, volume20Avg:100, stopDistancePct:3 }));
+  assert.equal(r.action, 'NO_TRADE');
+  assert.equal(r.reason, 'VOLUME_FILTER_FAILED');
+});
