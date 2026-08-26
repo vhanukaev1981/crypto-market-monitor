@@ -1,3 +1,37 @@
+export function evaluateExposureControl({
+  portfolioEquity,
+  positionValue,
+  entryAllocationCapPct = 25,
+  hardExposureCapPct = 30,
+} = {}) {
+  if (!Number.isFinite(portfolioEquity) || portfolioEquity <= 0 || !Number.isFinite(positionValue) || positionValue < 0) {
+    return { decision: 'HALT', targetPositionValue: 0, reduceNotional: 0, reasonCode: 'RISK_INVALID_EXPOSURE_STATE' };
+  }
+  if (!Number.isFinite(entryAllocationCapPct) || entryAllocationCapPct <= 0 || !Number.isFinite(hardExposureCapPct) || hardExposureCapPct <= entryAllocationCapPct) {
+    return { decision: 'HALT', targetPositionValue: 0, reduceNotional: 0, reasonCode: 'RISK_INVALID_EXPOSURE_LIMITS' };
+  }
+
+  const exposurePct = positionValue / portfolioEquity * 100;
+  if (exposurePct <= hardExposureCapPct) {
+    return {
+      decision: 'HOLD',
+      targetPositionValue: positionValue,
+      reduceNotional: 0,
+      exposurePct,
+      reasonCode: exposurePct > entryAllocationCapPct ? 'RISK_EXPOSURE_DRIFT_WITHIN_HARD_CAP' : 'RISK_EXPOSURE_WITHIN_ENTRY_CAP',
+    };
+  }
+
+  const targetPositionValue = portfolioEquity * hardExposureCapPct / 100;
+  return {
+    decision: 'REDUCE',
+    targetPositionValue,
+    reduceNotional: positionValue - targetPositionValue,
+    exposurePct,
+    reasonCode: 'RISK_HARD_EXPOSURE_CAP',
+  };
+}
+
 export function evaluateRisk(input) {
   const {
     portfolioEquity,
