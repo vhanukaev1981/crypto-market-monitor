@@ -2,25 +2,37 @@ function parseUtcTimestamp(raw) {
   const m = String(raw).match(/^(\d{4})\.(\d{2})\.(\d{2}) (\d{2}):(\d{2})$/);
   if (!m) throw new Error('INVALID_MT4_TIMESTAMP');
   const [,y,mo,d,h,mi] = m;
-  const ms = Date.UTC(Number(y), Number(mo)-1, Number(d), Number(h), Number(mi));
-  return ms;
+  return Date.UTC(Number(y), Number(mo)-1, Number(d), Number(h), Number(mi));
+}
+
+function sameOhlcv(a,b) {
+  return a.open===b.open && a.high===b.high && a.low===b.low && a.close===b.close && a.volume===b.volume;
 }
 
 export function parseBybitMt4Klines15m(text) {
   if (typeof text !== 'string') throw new Error('INVALID_MT4_TEXT');
   const out=[];
-  let prev=-Infinity;
+  let prevMs=-Infinity;
+  let prevRow=null;
   for (const rawLine of text.split(/\r?\n/)) {
     const line=rawLine.trim();
     if (!line) continue;
     const parts=line.split(',');
     if (parts.length !== 6) throw new Error('INVALID_MT4_ROW');
     const ms=parseUtcTimestamp(parts[0]);
-    if (ms <= prev) throw new Error('DUPLICATE_OR_NON_ASCENDING_MT4_TIMESTAMP');
-    prev=ms;
     const [open,high,low,close,volume]=parts.slice(1).map(Number);
     if (![open,high,low,close,volume].every(Number.isFinite) || open<=0 || high<=0 || low<=0 || close<=0 || volume<0 || high<Math.max(open,close,low) || low>Math.min(open,close,high)) throw new Error('INVALID_MT4_OHLCV');
-    out.push({time:new Date(ms).toISOString(),open,high,low,close,volume});
+    const row={time:new Date(ms).toISOString(),open,high,low,close,volume};
+
+    if (ms < prevMs) throw new Error('NON_ASCENDING_MT4_TIMESTAMP');
+    if (ms === prevMs) {
+      if (!prevRow || !sameOhlcv(row,prevRow)) throw new Error('CONFLICTING_MT4_DUPLICATE');
+      continue;
+    }
+
+    out.push(row);
+    prevMs=ms;
+    prevRow=row;
   }
   return out;
 }
