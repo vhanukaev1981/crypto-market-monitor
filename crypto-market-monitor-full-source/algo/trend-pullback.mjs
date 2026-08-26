@@ -10,12 +10,13 @@ export function evaluateTrendPullback(input) {
   const nearEma50 = Math.abs(price - ema50) <= 0.5 * atr;
   if ((!nearEma20 && !nearEma50) || pullbackDepthPct < 0.5 || pullbackDepthPct > 4) return { action: 'NO_TRADE', score: 0, reason: 'PULLBACK_QUALITY_FAILED' };
   if (rsi14 < 45 || rsi14 > 70) return { action: 'NO_TRADE', score: 0, reason: 'RSI_FILTER_FAILED' };
+  if (!Number.isFinite(volume20Avg) || volume20Avg <= 0 || volume < 0.8 * volume20Avg) return { action: 'NO_TRADE', score: 0, reason: 'VOLUME_FILTER_FAILED' };
   if (spreadBps > maxSpreadBps || estimatedSlippageBps > maxSlippageBps) return { action: 'NO_TRADE', score: 0, reason: 'EXECUTION_QUALITY_FAILED' };
 
   const candleRange = Math.max(0, candleHigh - candleLow);
   const upper40Threshold = candleLow + 0.6 * candleRange;
   const stabilized = candleClose > previousClose || candleClose >= upper40Threshold || price > ema20;
-  const volumeOk = volume >= 0.8 * volume20Avg;
+  const volumeOk = true;
 
   let score = 0;
   score += Math.min(25, 15 + Math.max(0, adx14 - 22));
