@@ -24,7 +24,7 @@ export const READ_ONLY_ANNOTATIONS = {
 } as const;
 
 export function oauthSecuritySchemes() {
-  return [{ type: "oauth2" as const, scopes: ["cryptobot.read"] }];
+  return [{ type: "oauth2" as const, scopes: ["email"] }];
 }
 
 export const CRYPTOBOT_TOOL_SPECS = [
