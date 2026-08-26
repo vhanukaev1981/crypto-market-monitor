@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { tradesStreamToHourlyCandles } from '../algo/bybit-trade-stream-import.mjs';
@@ -132,7 +133,7 @@ const summary={
 };
 const json=JSON.stringify(summary,null,2);
 if(out){
-  await fs.mkdir(new URL('.',`file://${process.cwd()}/${out}`).pathname,{recursive:true}).catch(()=>{});
+  await fs.mkdir(dirname(out),{recursive:true});
   await fs.writeFile(out,json+'\n','utf8');
 }
 console.log(json);
