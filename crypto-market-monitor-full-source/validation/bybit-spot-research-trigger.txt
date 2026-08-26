@@ -1,0 +1,4 @@
+run=1
+source=BYBIT_SPOT
+research_window=2022-11..2024-12
+oos_lock=2025-01+
