@@ -38,7 +38,7 @@ function authConfigFromEnv(): AuthVerificationConfig {
         .filter(Boolean),
     ),
     supabaseUserId: requiredEnv("CRYPTOBOT_SUPABASE_USER_ID"),
-    requiredScope: "cryptobot.read",
+    requiredScope: "email",
   };
 }
 
