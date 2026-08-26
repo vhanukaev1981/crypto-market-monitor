@@ -10,10 +10,11 @@ function arg(name, fallback=null) {
 const symbol=arg('symbol');
 const input=arg('input');
 const out=arg('out');
+const sourceMinutes=Number(arg('source-minutes','60'));
 const maxGapHours=Number(arg('max-gap-hours','3'));
 if (!symbol || !input) throw new Error('MISSING_REQUIRED_ARGUMENT');
 const text=await fs.readFile(input,'utf8');
-const prepared=prepareBybitMt4Hourly(text,{maxGapHours});
+const prepared=prepareBybitMt4Hourly(text,{sourceMinutes,maxGapHours});
 const candles=prepared.candles;
 const result=runTrendPullbackBacktest({
   candles,
@@ -32,7 +33,8 @@ const summary={
   engine:'ALGO_V2_BYBIT_MT4_ARCHIVE_V1_2',
   symbol,
   data:{
-    candles15m:prepared.raw15mCount,
+    sourceMinutes:prepared.sourceMinutes,
+    sourceCandles:prepared.rawSourceCount,
     nativeCandles1h:prepared.native1hCount,
     candles1h:candles.length,
     syntheticGapHours:prepared.gapsFilled,
@@ -40,7 +42,7 @@ const summary={
     first:candles[0]?.time??null,
     last:candles.at(-1)?.time??null,
   },
-  parameters:{startingEquity:100000,riskPct:0.0035,maxPositionPct:0.25,atrStopMult:1.5,trailAtrMult:2,spreadBps:2,slippageBps:2,feeBps:10,maxGapHours},
+  parameters:{startingEquity:100000,riskPct:0.0035,maxPositionPct:0.25,atrStopMult:1.5,trailAtrMult:2,spreadBps:2,slippageBps:2,feeBps:10,sourceMinutes,maxGapHours},
   status:result.status,
   metrics:result.metrics??null,
   totalExecutionCosts:result.totalExecutionCosts??0,
