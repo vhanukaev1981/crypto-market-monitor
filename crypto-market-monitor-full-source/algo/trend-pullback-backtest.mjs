@@ -12,6 +12,18 @@ function normalizeCandles(candles) {
   return candles.map(c=>({time:new Date(c.time).toISOString(),open:Number(c.open),high:Number(c.high),low:Number(c.low),close:Number(c.close),volume:Number(c.volume)}));
 }
 
+function entryMetadata(position) {
+  return {
+    entryRegime: position.entryRegime,
+    entryRegimeConfidence: position.entryRegimeConfidence,
+    structural1d: position.structural1d,
+    confirmation4h: position.confirmation4h,
+    entryAtrPct: position.entryAtrPct,
+    entryAdx14: position.entryAdx14,
+    entryRsi14: position.entryRsi14,
+  };
+}
+
 export function runTrendPullbackBacktest({
   candles,
   startingEquity=100000,
@@ -94,7 +106,7 @@ export function runTrendPullbackBacktest({
         totalExecutionCosts += position.qty * (c.close - fill.price) + fill.fee;
         cash += fill.cashDelta;
         const pnl=fill.cashDelta-position.totalCost;
-        trades.push({entryTime:position.entryTime,exitTime:c.time,entryPrice:position.entryPrice,exitPrice:fill.price,qty:position.qty,pnl,exitReason,entryScore:position.entryScore});
+        trades.push({entryTime:position.entryTime,exitTime:c.time,entryPrice:position.entryPrice,exitPrice:fill.price,qty:position.qty,pnl,exitReason,entryScore:position.entryScore,...entryMetadata(position)});
         position=null;
       }
       equityCurve.push(cash+(position?position.qty*c.close:0));
@@ -140,7 +152,22 @@ export function runTrendPullbackBacktest({
     if (qty<=0) { equityCurve.push(cash); continue; }
     totalExecutionCosts += qty * (fill.price - c.close) + fill.fee;
     cash += fill.cashDelta;
-    position={qty,totalCost:-fill.cashDelta,entryTime:c.time,entryPrice:fill.price,initialStop:fill.price-stopDistance,trailingStop:fill.price-stopDistance,entryScore:signal.score};
+    position={
+      qty,
+      totalCost:-fill.cashDelta,
+      entryTime:c.time,
+      entryPrice:fill.price,
+      initialStop:fill.price-stopDistance,
+      trailingStop:fill.price-stopDistance,
+      entryScore:signal.score,
+      entryRegime:regime.regime,
+      entryRegimeConfidence:regime.confidence,
+      structural1d,
+      confirmation4h,
+      entryAtrPct:atrPct,
+      entryAdx14:adx[i],
+      entryRsi14:rsi[i],
+    };
     const eqAfter=cash+position.qty*c.close;
     const entryExposurePct=(position.qty*c.close/eqAfter)*100;
     maxObservedExposurePct=Math.max(maxObservedExposurePct,entryExposurePct);
