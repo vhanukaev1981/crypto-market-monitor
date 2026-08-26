@@ -1,2 +1,2 @@
-run=14
-reason=RED test for continuous mark-to-market max position exposure invariant
+run=15
+reason=RED test for two-tier 25% entry allocation and 30% hard exposure control
