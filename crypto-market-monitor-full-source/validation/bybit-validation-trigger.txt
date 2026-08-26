@@ -1,2 +1,2 @@
-run=21
-reason=verify deterministic hard exposure partial trim accounting helper before harness refactor
+run=22
+reason=full regression and Bybit validation after refactoring harness to single hard-exposure trim helper
