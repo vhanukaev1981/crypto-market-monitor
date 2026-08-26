@@ -6,6 +6,7 @@ import { summarizeRiskDecisions } from '../algo/risk-decision-attribution.mjs';
 import { summarizeTradeAttribution } from '../algo/trade-attribution.mjs';
 import { summarizeTradeFeatureOutcomes } from '../algo/trade-feature-outcomes.mjs';
 import { annotateTradesWithStructuralPersistence } from '../algo/structural-trade-annotation.mjs';
+import { summarizeStructuralBuckets } from '../algo/structural-bucket-attribution.mjs';
 
 function arg(name, fallback=null) {
   const i=process.argv.indexOf(`--${name}`);
@@ -67,6 +68,7 @@ for (const segment of eligible) {
     const risk=summarizeRiskDecisions(result.riskEvents);
     const attribution=summarizeTradeAttribution(result.trades);
     const featureOutcomes=summarizeTradeFeatureOutcomes(annotatedTrades);
+    const structuralBuckets=summarizeStructuralBuckets(annotatedTrades);
     const firstHalt=result.riskEvents.find(e=>e.reasonCode==='RISK_003_MAX_DRAWDOWN') ?? null;
     folds.push({
       segmentIndex,
@@ -93,13 +95,14 @@ for (const segment of eligible) {
       risk,
       attribution,
       featureOutcomes,
+      structuralBuckets,
     });
   }
 }
 
 const summary={
   engine:'ALGO_V2_BYBIT_INDEPENDENT_RISK_RESET_ALPHA_FOLDS_V1_2',
-  warning:'RESEARCH_DIAGNOSTIC_ONLY. Production max-drawdown halt is unchanged. Each fold starts with fresh portfolio/risk state while preserving pre-fold candles for indicators. Structural persistence is annotated post-run and cannot affect trading decisions.',
+  warning:'RESEARCH_DIAGNOSTIC_ONLY. Production max-drawdown halt is unchanged. Each fold starts with fresh portfolio/risk state while preserving pre-fold candles for indicators. Structural persistence and fixed buckets are annotated post-run and cannot affect trading decisions.',
   symbol,
   parameters,
   data:{
