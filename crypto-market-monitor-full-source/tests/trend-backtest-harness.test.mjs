@@ -46,6 +46,21 @@ test('completed trades preserve entry regime metadata for post-run attribution',
   }
 });
 
+test('harness records an auditable signal funnel event for every flat feature-ready evaluation', () => {
+  const r=runTrendPullbackBacktest({candles:makeTrend(7000),spreadBps:0,slippageBps:0,feeBps:0});
+  assert.ok(Array.isArray(r.signalFunnelEvents));
+  assert.ok(r.signalFunnelEvents.length>0);
+  for (const event of r.signalFunnelEvents.slice(0,25)) {
+    assert.match(event.time,/^\d{4}-\d{2}-\d{2}T/);
+    assert.ok(['NO_TRADE','BUY_CANDIDATE'].includes(event.action));
+    assert.equal(typeof event.reason,'string');
+    assert.equal(typeof event.regime,'string');
+    assert.ok(Number.isFinite(event.regimeConfidence));
+    assert.equal(typeof event.structural1d,'string');
+    assert.equal(typeof event.confirmation4h,'string');
+  }
+});
+
 test('execution friction is explicitly accumulated by the harness', () => {
   const candles=makeTrend(7000);
   const free=runTrendPullbackBacktest({candles, spreadBps:0, slippageBps:0, feeBps:0});
