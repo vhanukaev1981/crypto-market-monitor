@@ -5,6 +5,7 @@ import { runTrendPullbackBacktest } from '../algo/trend-pullback-backtest.mjs';
 import { summarizeRiskDecisions } from '../algo/risk-decision-attribution.mjs';
 import { summarizeTradeAttribution } from '../algo/trade-attribution.mjs';
 import { summarizeTradeFeatureOutcomes } from '../algo/trade-feature-outcomes.mjs';
+import { annotateTradesWithStructuralPersistence } from '../algo/structural-trade-annotation.mjs';
 
 function arg(name, fallback=null) {
   const i=process.argv.indexOf(`--${name}`);
@@ -62,9 +63,10 @@ for (const segment of eligible) {
     const tradingStartTime=year===null ? segment[0].time : new Date(Date.UTC(year,0,1)).toISOString();
     const result=runTrendPullbackBacktest({candles:segment,tradingStartTime,...parameters});
     if (result.status!=='COMPLETED') throw new Error(`FOLD_BACKTEST_${result.status}`);
+    const annotatedTrades=annotateTradesWithStructuralPersistence({candles:segment,trades:result.trades});
     const risk=summarizeRiskDecisions(result.riskEvents);
     const attribution=summarizeTradeAttribution(result.trades);
-    const featureOutcomes=summarizeTradeFeatureOutcomes(result.trades);
+    const featureOutcomes=summarizeTradeFeatureOutcomes(annotatedTrades);
     const firstHalt=result.riskEvents.find(e=>e.reasonCode==='RISK_003_MAX_DRAWDOWN') ?? null;
     folds.push({
       segmentIndex,
@@ -97,7 +99,7 @@ for (const segment of eligible) {
 
 const summary={
   engine:'ALGO_V2_BYBIT_INDEPENDENT_RISK_RESET_ALPHA_FOLDS_V1_2',
-  warning:'RESEARCH_DIAGNOSTIC_ONLY. Production max-drawdown halt is unchanged. Each fold starts with fresh portfolio/risk state while preserving pre-fold candles for indicators.',
+  warning:'RESEARCH_DIAGNOSTIC_ONLY. Production max-drawdown halt is unchanged. Each fold starts with fresh portfolio/risk state while preserving pre-fold candles for indicators. Structural persistence is annotated post-run and cannot affect trading decisions.',
   symbol,
   parameters,
   data:{
