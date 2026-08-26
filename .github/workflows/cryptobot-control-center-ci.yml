@@ -37,6 +37,8 @@ jobs:
         run: npm install --package-lock-only --ignore-scripts
       - name: Install locked dependencies
         run: npm ci --ignore-scripts
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
       - name: Build canonical CryptoBot widget bundle
         run: npm run mcp:build-widget
       - name: Persist generated lockfile and widget bundle on implementation branch
