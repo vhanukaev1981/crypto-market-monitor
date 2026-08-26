@@ -1,2 +1,2 @@
-run=16
-reason=GREEN verification for two-tier 25% entry allocation and 30% hard exposure control
+run=17
+reason=RED integration test for emergency hard exposure trim above separate entry allocation cap
