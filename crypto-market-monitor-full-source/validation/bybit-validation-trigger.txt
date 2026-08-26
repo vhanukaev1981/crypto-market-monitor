@@ -1,2 +1,2 @@
-run=17
-reason=RED integration test for emergency hard exposure trim above separate entry allocation cap
+run=18
+reason=GREEN integration verification for emergency hard exposure trim above separate entry allocation cap
