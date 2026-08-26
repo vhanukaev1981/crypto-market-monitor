@@ -6,6 +6,7 @@ on:
       - agent/algo-v2-core-v1
     paths:
       - .github/workflows/algo-v2-bybit-validation.yml
+      - crypto-market-monitor-full-source/scripts/diagnose-bybit-exposure.mjs
       - crypto-market-monitor-full-source/validation/bybit-validation-trigger.txt
   workflow_dispatch:
 
@@ -61,6 +62,10 @@ jobs:
       - name: Validate frozen BTCUSDT V1.2 on clean contiguous segments
         working-directory: crypto-market-monitor-full-source
         run: node scripts/run-bybit-mt4-segment-validation.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024.json
+
+      - name: Diagnose exposure drift on frozen BTCUSDT V1.2
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/diagnose-bybit-exposure.mjs --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-exposure-diagnostic.json
 
       - name: Run frozen BTCUSDT V1.2 robustness matrix
         working-directory: crypto-market-monitor-full-source
