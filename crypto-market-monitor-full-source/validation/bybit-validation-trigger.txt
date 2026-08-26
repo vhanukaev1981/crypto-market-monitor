@@ -1,2 +1,2 @@
-run=31
-reason=GREEN signal funnel harness integration before Bybit funnel analysis
+run=32
+reason=GREEN research fold start and auditable risk state before alpha diagnostic replay
