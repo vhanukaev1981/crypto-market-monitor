@@ -1,0 +1,55 @@
+name: CryptoBot Control Center CI
+
+on:
+  push:
+    branches:
+      - cryptobot-chatgpt-control-center-v1
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'crypto-market-monitor-full-source/mcp/**'
+      - 'crypto-market-monitor-full-source/src/cryptobot/**'
+      - 'crypto-market-monitor-full-source/tests/cryptobot/**'
+      - 'crypto-market-monitor-full-source/package.json'
+      - 'crypto-market-monitor-full-source/package-lock.json'
+
+permissions:
+  contents: write
+
+jobs:
+  cryptobot:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crypto-market-monitor-full-source
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: crypto-market-monitor-full-source/package-lock.json
+      - name: Refresh lockfile on implementation branch
+        if: github.event_name == 'push'
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Commit lockfile if changed
+        if: github.event_name == 'push'
+        working-directory: .
+        run: |
+          if git diff --quiet -- crypto-market-monitor-full-source/package-lock.json; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crypto-market-monitor-full-source/package-lock.json
+          git commit -m "chore: refresh CryptoBot dependency lockfile"
+          git push origin HEAD:${GITHUB_REF_NAME}
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: CryptoBot tests
+        run: npm run test:cryptobot
+      - name: Existing safety tests
+        run: node --test tests/*.test.mjs
