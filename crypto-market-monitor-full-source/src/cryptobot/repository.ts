@@ -14,6 +14,7 @@ export interface CryptoBotRepository {
   getBotStatuses(userId: string): Promise<RepoResult<Row[]>>;
   getStrategyPerformance(userId: string): Promise<RepoResult<Row[]>>;
   getStrategyDecisions(userId: string, limit?: number): Promise<RepoResult<Row[]>>;
+  getStrategyDecision(userId: string, decisionId: string): Promise<RepoResult<Row | null>>;
   getRiskEvents(userId: string, limit?: number): Promise<RepoResult<Row[]>>;
   getExchangeConnection(userId: string): Promise<RepoResult<Row | null>>;
   getStreamState(userId: string): Promise<RepoResult<Row | null>>;
