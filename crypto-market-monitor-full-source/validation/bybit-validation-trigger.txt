@@ -1,2 +1,2 @@
-run=26
-reason=GREEN verification for auditable trade attribution summaries by year and regime
+run=27
+reason=GREEN reverification after floating point assertion correction in trade attribution tests
