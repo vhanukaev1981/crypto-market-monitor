@@ -5,6 +5,8 @@ function result<T>(data: T, error: { message?: string } | null): RepoResult<T> {
   return { data, error: error?.message?.slice(0, 300) ?? null };
 }
 
+const decisionSelect = "id,run_id,bot_id,symbol,strategy_key,strategy_version,timeframe,candle_time,market_regime,regime_confidence,score,signal,eligible,rejection_codes,expected_gross_edge_bps,estimated_fee_bps,estimated_slippage_bps,expected_net_edge_bps,reward_risk_gross,reward_risk_net,spread_bps,metadata,created_at";
+
 export function createSupabaseRepository(scoped: ScopedSupabase): CryptoBotRepository {
   const { client } = scoped;
   return {
@@ -52,9 +54,17 @@ export function createSupabaseRepository(scoped: ScopedSupabase): CryptoBotRepos
     async getStrategyDecisions(userId, limit = 50) {
       const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
       const { data, error } = await client.from("strategy_decisions_v3")
-        .select("id,run_id,bot_id,symbol,strategy_key,strategy_version,timeframe,candle_time,market_regime,regime_confidence,score,signal,eligible,rejection_codes,expected_gross_edge_bps,estimated_fee_bps,estimated_slippage_bps,expected_net_edge_bps,reward_risk_gross,reward_risk_net,spread_bps,metadata,created_at")
+        .select(decisionSelect)
         .eq("user_id", userId).order("created_at", { ascending: false }).limit(safeLimit);
       return result((data as Row[] | null) ?? [], error);
+    },
+    async getStrategyDecision(userId, decisionId) {
+      const numericId = Number(decisionId);
+      if (!Number.isSafeInteger(numericId) || numericId < 1) return result<Row | null>(null, { message: "invalid_decision_id" });
+      const { data, error } = await client.from("strategy_decisions_v3")
+        .select(decisionSelect)
+        .eq("user_id", userId).eq("id", numericId).maybeSingle();
+      return result((data as Row | null) ?? null, error);
     },
     async getRiskEvents(userId, limit = 20) {
       const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 100);
