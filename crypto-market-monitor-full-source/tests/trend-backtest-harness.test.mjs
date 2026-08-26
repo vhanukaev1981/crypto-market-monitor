@@ -48,6 +48,13 @@ test('completed trades preserve entry regime metadata for post-run attribution',
     assert.ok(Number.isFinite(trade.entryEma50SlopePct));
     assert.ok(Number.isFinite(trade.entryDistanceToEma20Atr));
     assert.ok(Number.isFinite(trade.entryDistanceToEma50Atr));
+    assert.ok(Number.isFinite(trade.entryEfficiency24));
+    assert.ok(trade.entryEfficiency24>=0 && trade.entryEfficiency24<=1);
+    assert.ok(Number.isFinite(trade.entryEfficiency72));
+    assert.ok(trade.entryEfficiency72>=0 && trade.entryEfficiency72<=1);
+    assert.ok(Number.isFinite(trade.entryEma20PositiveSlopeShare24));
+    assert.ok(trade.entryEma20PositiveSlopeShare24>=0 && trade.entryEma20PositiveSlopeShare24<=1);
+    assert.ok(Number.isFinite(trade.entryAdxDelta12));
     assert.ok(Number.isFinite(trade.holdingHours));
     assert.ok(trade.holdingHours>=0);
   }
