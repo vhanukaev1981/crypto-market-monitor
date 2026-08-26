@@ -15,7 +15,7 @@ async function setup() {
     audience: AUDIENCE,
     allowedSubjects: new Set([SUBJECT]),
     supabaseUserId: USER_ID,
-    requiredScope: "cryptobot.read",
+    requiredScope: "email",
   };
   const sign = (overrides: Record<string, unknown> = {}) => {
     const now = Math.floor(Date.now() / 1000);
@@ -23,7 +23,7 @@ async function setup() {
       iss: ISSUER,
       aud: AUDIENCE,
       sub: SUBJECT,
-      scope: "cryptobot.read",
+      scope: "email",
       email: "owner@example.test",
       iat: now,
       exp: now + 300,
@@ -36,7 +36,7 @@ async function setup() {
   return { publicKey, config, sign };
 }
 
-test("valid token resolves a scoped CryptoBot principal", async () => {
+test("valid token with email scope resolves a scoped CryptoBot principal", async () => {
   const { publicKey, config, sign } = await setup();
   const principal = await verifyTokenWithKey(await sign(), publicKey, config);
   assert.deepEqual(principal, {
@@ -74,7 +74,7 @@ test("disallowed subject is rejected", async () => {
   );
 });
 
-test("missing required read scope is rejected", async () => {
+test("missing required email scope is rejected", async () => {
   const { publicKey, config, sign } = await setup();
   const token = await sign({ scope: "profile" });
   await assert.rejects(
