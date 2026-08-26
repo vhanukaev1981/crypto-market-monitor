@@ -1,2 +1,2 @@
-run=22
-reason=full regression and Bybit validation after refactoring harness to single hard-exposure trim helper
+run=23
+reason=RED test for trade entry regime metadata attribution
