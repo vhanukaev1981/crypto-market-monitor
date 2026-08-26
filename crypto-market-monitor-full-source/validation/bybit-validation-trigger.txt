@@ -1,2 +1,2 @@
-run=32
-reason=GREEN research fold start and auditable risk state before alpha diagnostic replay
+run=33
+reason=verify structural persistence entry metadata RED before implementation
