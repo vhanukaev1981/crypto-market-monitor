@@ -41,10 +41,10 @@ export function runTrendPullbackBacktest({
 }={}) {
   if (!Number.isFinite(maxPositionPct) || maxPositionPct<=0 || !Number.isFinite(hardExposurePct) || hardExposurePct<=maxPositionPct) throw new Error('INVALID_EXPOSURE_LIMITS');
   const rows=normalizeCandles(candles);
-  if (rows.length < 4800) return {status:'INSUFFICIENT_HISTORY', trades:[], equityCurve:[], startingEquity, endingEquity:startingEquity, maxObservedExposurePct:0, maxPostControlExposurePct:0, exposureControlEvents:[]};
+  if (rows.length < 4800) return {status:'INSUFFICIENT_HISTORY', trades:[], equityCurve:[], startingEquity, endingEquity:startingEquity, maxObservedExposurePct:0, maxPostControlExposurePct:0, exposureControlEvents:[], signalFunnelEvents:[]};
   const h4=aggregateCompletedCandles(rows,{timeframeHours:4});
   const d1=aggregateCompletedCandles(rows,{timeframeHours:24});
-  if (h4.length<200 || d1.length<200) return {status:'INSUFFICIENT_HISTORY', trades:[], equityCurve:[], startingEquity, endingEquity:startingEquity, maxObservedExposurePct:0, maxPostControlExposurePct:0, exposureControlEvents:[]};
+  if (h4.length<200 || d1.length<200) return {status:'INSUFFICIENT_HISTORY', trades:[], equityCurve:[], startingEquity, endingEquity:startingEquity, maxObservedExposurePct:0, maxPostControlExposurePct:0, exposureControlEvents:[], signalFunnelEvents:[]};
 
   const closes=rows.map(c=>c.close);
   const ema20=emaSeries(closes,20), ema50=emaSeries(closes,50), ema200=emaSeries(closes,200);
@@ -57,7 +57,7 @@ export function runTrendPullbackBacktest({
 
   let cash=startingEquity, position=null, peak=startingEquity, dayStartEquity=startingEquity, currentDay=null;
   let maxObservedExposurePct=0, maxPostControlExposurePct=0, totalExecutionCosts=0;
-  const trades=[], equityCurve=[], riskEvents=[], exposureControlEvents=[];
+  const trades=[], equityCurve=[], riskEvents=[], exposureControlEvents=[], signalFunnelEvents=[];
 
   for (let i=0;i<rows.length;i++) {
     const c=rows[i], decisionMs=Date.parse(c.time)+3600000;
@@ -127,6 +127,16 @@ export function runTrendPullbackBacktest({
       price:c.close, ema20:ema20[i], ema50:ema50[i], ema200:ema200[i], ema20Slope:ema20[i]-ema20[i-1], ema50Slope:ema50[i]-ema50[i-1], adx14:adx[i], atr:atr[i], rsi14:rsi[i], pullbackDepthPct,
       previousClose:rows[i-1].close,candleHigh:c.high,candleLow:c.low,candleClose:c.close,volume:c.volume,volume20Avg:vol20[i],spreadBps,maxSpreadBps,estimatedSlippageBps:slippageBps,maxSlippageBps,
     });
+    signalFunnelEvents.push({
+      time:c.time,
+      action:signal.action,
+      reason:signal.reason,
+      score:Number.isFinite(signal.score)?signal.score:null,
+      regime:regime.regime,
+      regimeConfidence:regime.confidence,
+      structural1d,
+      confirmation4h,
+    });
     if (signal.action!=='BUY_CANDIDATE') { equityCurve.push(cash); continue; }
 
     const stopDistance=atrStopMult*atr[i];
@@ -176,5 +186,5 @@ export function runTrendPullbackBacktest({
   }
   const endingEquity=equityCurve.at(-1)??startingEquity;
   const metrics=calculatePerformance({startingEquity,equityCurve,trades});
-  return {status:'COMPLETED',startingEquity,endingEquity,trades,equityCurve,metrics,maxObservedExposurePct,maxPostControlExposurePct,totalExecutionCosts,riskEvents,exposureControlEvents,openPosition:position};
+  return {status:'COMPLETED',startingEquity,endingEquity,trades,equityCurve,metrics,maxObservedExposurePct,maxPostControlExposurePct,totalExecutionCosts,riskEvents,exposureControlEvents,signalFunnelEvents,openPosition:position};
 }
