@@ -18,7 +18,7 @@ import {
   getRiskStatus,
   getSystemHealth,
   type Principal,
-} from "https://raw.githubusercontent.com/vhanukaev1981/crypto-market-monitor/2b20d9e3276c36643736eb3f2e7cfaad46f3ddc4/crypto-market-monitor-full-source/supabase/functions/cryptobot-mcp/data.ts";
+} from "./data.ts";
 
 const FUNCTION_NAME = "cryptobot-mcp";
 const PROJECT_URL = (Deno.env.get("SUPABASE_URL") ?? "").replace(/\/$/, "");
@@ -26,13 +26,34 @@ const MCP_URL = `${PROJECT_URL}/functions/v1/${FUNCTION_NAME}/mcp`;
 const RESOURCE_METADATA_URL = `${PROJECT_URL}/functions/v1/${FUNCTION_NAME}/.well-known/oauth-protected-resource`;
 const CONTROL_CENTER_URI = "ui://cryptobot/control-center/v1.html";
 const STANDARD_SCOPES = ["email"];
-const WIDGET_URL = "https://raw.githubusercontent.com/vhanukaev1981/crypto-market-monitor/2b20d9e3276c36643736eb3f2e7cfaad46f3ddc4/crypto-market-monitor-full-source/supabase/functions/cryptobot-mcp/widget.html";
+const VERIFIED_WIDGET_COMMIT = "1587000700feeddab50e362310c678e8680c707b";
+const RAW_ROOT = `https://raw.githubusercontent.com/vhanukaev1981/crypto-market-monitor/${VERIFIED_WIDGET_COMMIT}/crypto-market-monitor-full-source`;
+const WIDGET_SHELL_URL = `${RAW_ROOT}/mcp/web/index.html`;
+const WIDGET_BUNDLE_URL = `${RAW_ROOT}/mcp/dist/widget.js`;
 
 if (!PROJECT_URL) throw new Error("SUPABASE_URL_missing");
 
-const widgetResponse = await fetch(WIDGET_URL, { headers: { Accept: "text/html" } });
-if (!widgetResponse.ok) throw new Error(`widget_fetch_failed:${widgetResponse.status}`);
-const widgetHtml = await widgetResponse.text();
+async function fetchVerifiedWidget() {
+  const [shellResponse, bundleResponse] = await Promise.all([
+    fetch(WIDGET_SHELL_URL, {
+      headers: { Accept: "text/html" },
+      signal: AbortSignal.timeout(8_000),
+    }),
+    fetch(WIDGET_BUNDLE_URL, {
+      headers: { Accept: "text/javascript" },
+      signal: AbortSignal.timeout(8_000),
+    }),
+  ]);
+  if (!shellResponse.ok) throw new Error(`widget_shell_fetch_failed:${shellResponse.status}`);
+  if (!bundleResponse.ok) throw new Error(`widget_bundle_fetch_failed:${bundleResponse.status}`);
+  const shell = await shellResponse.text();
+  const bundle = (await bundleResponse.text()).replaceAll("</script", "<\\/script");
+  if (!shell.includes("__CRYPTOBOT_WIDGET_BUNDLE__")) throw new Error("widget_shell_placeholder_missing");
+  if (!bundle.trim()) throw new Error("widget_bundle_empty");
+  return shell.replace("__CRYPTOBOT_WIDGET_BUNDLE__", bundle);
+}
+
+const widgetHtml = await fetchVerifiedWidget();
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -46,6 +67,7 @@ function unauthorized() {
     status: 401,
     headers: {
       "Content-Type": "application/json",
+      "Cache-Control": "no-store",
       "WWW-Authenticate": `Bearer resource_metadata="${RESOURCE_METADATA_URL}", scope="${STANDARD_SCOPES.join(" ")}"`,
       ...cors,
     },
@@ -156,8 +178,19 @@ function createServer(principal: Principal) {
 
 const app = new Hono().basePath(`/${FUNCTION_NAME}`);
 app.options("*", () => new Response(null, { status: 204, headers: cors }));
-app.get("/health", (c) => c.json({ ok: true, service: "cryptobot-mcp", mode: "read_only", mcp: "/mcp" }));
-app.get("/.well-known/oauth-protected-resource", (c) => c.json({ resource: MCP_URL, authorization_servers: [authServerUrl()], scopes_supported: STANDARD_SCOPES, bearer_methods_supported: ["header"] }));
+app.get("/health", (c) => c.json({
+  ok: true,
+  service: "cryptobot-mcp",
+  mode: "private_read_only",
+  mcp: "/mcp",
+  widget_commit: VERIFIED_WIDGET_COMMIT,
+}));
+app.get("/.well-known/oauth-protected-resource", (c) => c.json({
+  resource: MCP_URL,
+  authorization_servers: [authServerUrl()],
+  scopes_supported: STANDARD_SCOPES,
+  bearer_methods_supported: ["header"],
+}));
 app.all("/mcp", async (c) => {
   const principal = await principalFor(c.req.raw);
   if (!principal) return unauthorized();
