@@ -31,6 +31,21 @@ test('runs the full MTF chain and produces trades on a persistent synthetic uptr
   assert.ok(r.equityCurve.length > 0);
 });
 
+test('completed trades preserve entry regime metadata for post-run attribution', () => {
+  const r=runTrendPullbackBacktest({candles:makeTrend(7000),spreadBps:0,slippageBps:0,feeBps:0});
+  assert.ok(r.trades.length>0);
+  for (const trade of r.trades) {
+    assert.equal(trade.entryRegime,'TREND_UP');
+    assert.ok(Number.isFinite(trade.entryRegimeConfidence));
+    assert.ok(trade.entryRegimeConfidence>=70 && trade.entryRegimeConfidence<=100);
+    assert.equal(trade.structural1d,'TREND_UP');
+    assert.equal(trade.confirmation4h,'TREND_UP');
+    assert.ok(Number.isFinite(trade.entryAtrPct));
+    assert.ok(Number.isFinite(trade.entryAdx14));
+    assert.ok(Number.isFinite(trade.entryRsi14));
+  }
+});
+
 test('execution friction is explicitly accumulated by the harness', () => {
   const candles=makeTrend(7000);
   const free=runTrendPullbackBacktest({candles, spreadBps:0, slippageBps:0, feeBps:0});
