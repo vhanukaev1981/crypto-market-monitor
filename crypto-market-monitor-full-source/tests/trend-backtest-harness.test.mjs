@@ -61,6 +61,30 @@ test('harness records an auditable signal funnel event for every flat feature-re
   }
 });
 
+test('risk events preserve the state that produced each decision', () => {
+  const r=runTrendPullbackBacktest({candles:makeTrend(7000)});
+  assert.ok(r.riskEvents.length>0);
+  for (const event of r.riskEvents.slice(0,25)) {
+    assert.ok(Number.isFinite(event.drawdownPct));
+    assert.ok(Number.isFinite(event.dailyPnlPct));
+    assert.ok(Number.isFinite(event.requestedNotional));
+    assert.ok(Number.isFinite(event.atrPct));
+    assert.equal(typeof event.volatilityLevel,'string');
+    assert.equal(typeof event.signalReason,'string');
+  }
+});
+
+test('research fold start keeps indicator warmup but forbids entries before the fold', () => {
+  const candles=makeTrend(9000);
+  const tradingStartTime=candles[6500].time;
+  const r=runTrendPullbackBacktest({candles,tradingStartTime,spreadBps:0,slippageBps:0,feeBps:0});
+  assert.equal(r.status,'COMPLETED');
+  assert.equal(r.tradingStartTime,tradingStartTime);
+  assert.ok(r.trades.length>0);
+  for (const trade of r.trades) assert.ok(Date.parse(trade.entryTime)>=Date.parse(tradingStartTime));
+  for (const event of r.riskEvents) assert.ok(Date.parse(event.time)>=Date.parse(tradingStartTime));
+});
+
 test('execution friction is explicitly accumulated by the harness', () => {
   const candles=makeTrend(7000);
   const free=runTrendPullbackBacktest({candles, spreadBps:0, slippageBps:0, feeBps:0});
@@ -75,11 +99,7 @@ test('spot-only entry allocation never exceeds configured entry cap at ordinary 
 });
 
 test('harness exposes separate entry and emergency exposure semantics', () => {
-  const r=runTrendPullbackBacktest({
-    candles:makeTrend(7000),
-    maxPositionPct:0.25,
-    hardExposurePct:0.30,
-  });
+  const r=runTrendPullbackBacktest({candles:makeTrend(7000),maxPositionPct:0.25,hardExposurePct:0.30});
   assert.equal(r.status,'COMPLETED');
   assert.ok(Array.isArray(r.exposureControlEvents));
   assert.ok(Number.isFinite(r.maxPostControlExposurePct));
@@ -87,8 +107,5 @@ test('harness exposes separate entry and emergency exposure semantics', () => {
 });
 
 test('harness fails closed when hard exposure cap is not above entry allocation cap', () => {
-  assert.throws(
-    () => runTrendPullbackBacktest({candles:makeTrend(7000),maxPositionPct:0.25,hardExposurePct:0.25}),
-    /INVALID_EXPOSURE_LIMITS/,
-  );
+  assert.throws(() => runTrendPullbackBacktest({candles:makeTrend(7000),maxPositionPct:0.25,hardExposurePct:0.25}),/INVALID_EXPOSURE_LIMITS/);
 });
