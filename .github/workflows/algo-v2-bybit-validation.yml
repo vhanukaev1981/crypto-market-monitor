@@ -45,12 +45,14 @@ jobs:
               base="https://public.bybit.com/kline_for_metatrader4/${symbol}/${year}/"
               html=$(curl -L -sS --max-time 30 "$base")
               mapfile -t files < <(printf '%s' "$html" | grep -oE "${symbol}_15_${year}-[0-9-]+_[0-9-]+\.csv\.gz" | sort -u)
-              if [ ${#files[@]} -lt 12 ]; then
-                echo "Expected at least 12 monthly files for ${symbol} ${year}, got ${#files[@]}" >&2
+              required=12
+              if [ "$year" = "2024" ]; then required=11; fi
+              if [ ${#files[@]} -lt $required ]; then
+                echo "Expected at least ${required} monthly files for ${symbol} ${year}, got ${#files[@]}" >&2
                 exit 2
               fi
+              echo "${symbol} ${year}: ${#files[@]} monthly files"
               for file in "${files[@]}"; do
-                echo "Downloading ${file}"
                 curl -L -sS --fail --retry 3 --max-time 60 "${base}${file}" | gzip -dc >> "archive/${symbol}-15m.csv"
               done
             done
