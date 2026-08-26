@@ -43,6 +43,13 @@ test('completed trades preserve entry regime metadata for post-run attribution',
     assert.ok(Number.isFinite(trade.entryAtrPct));
     assert.ok(Number.isFinite(trade.entryAdx14));
     assert.ok(Number.isFinite(trade.entryRsi14));
+    assert.ok(Number.isFinite(trade.entryPullbackDepthPct));
+    assert.ok(Number.isFinite(trade.entryEma20SlopePct));
+    assert.ok(Number.isFinite(trade.entryEma50SlopePct));
+    assert.ok(Number.isFinite(trade.entryDistanceToEma20Atr));
+    assert.ok(Number.isFinite(trade.entryDistanceToEma50Atr));
+    assert.ok(Number.isFinite(trade.holdingHours));
+    assert.ok(trade.holdingHours>=0);
   }
 });
 
