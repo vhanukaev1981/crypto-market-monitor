@@ -8,6 +8,18 @@ function clonePosition(position) {
   return { ...position };
 }
 
+function entryMetadata(position) {
+  return {
+    entryRegime: position.entryRegime,
+    entryRegimeConfidence: position.entryRegimeConfidence,
+    structural1d: position.structural1d,
+    confirmation4h: position.confirmation4h,
+    entryAtrPct: position.entryAtrPct,
+    entryAdx14: position.entryAdx14,
+    entryRsi14: position.entryRsi14,
+  };
+}
+
 export function applyHardExposureTrim({
   time,
   cash,
@@ -104,6 +116,7 @@ export function applyHardExposureTrim({
     pnl,
     exitReason: 'HARD_EXPOSURE_TRIM',
     entryScore: nextPosition.entryScore,
+    ...entryMetadata(nextPosition),
   };
   const event = {
     time,
