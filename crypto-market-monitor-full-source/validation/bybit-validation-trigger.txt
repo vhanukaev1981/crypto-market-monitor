@@ -1,2 +1,2 @@
-run=15
-reason=RED test for two-tier 25% entry allocation and 30% hard exposure control
+run=16
+reason=GREEN verification for two-tier 25% entry allocation and 30% hard exposure control
