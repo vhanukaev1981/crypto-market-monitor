@@ -1,2 +1,2 @@
-run=11
-reason=RED test for direct official Bybit MT4 60m validation path
+run=12
+reason=RED test for exact hourly gap diagnostics and contiguous segment splitting
