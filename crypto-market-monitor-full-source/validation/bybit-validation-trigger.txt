@@ -1,2 +1,2 @@
-run=19
-reason=diagnose pre-control peak exposure in synthetic hard-cap integration fixture
+run=20
+reason=RED unit test for deterministic hard exposure partial trim accounting
