@@ -11,6 +11,7 @@ on:
       - crypto-market-monitor-full-source/scripts/diagnose-bybit-exposure.mjs
       - crypto-market-monitor-full-source/scripts/analyze-bybit-trade-attribution.mjs
       - crypto-market-monitor-full-source/scripts/analyze-bybit-signal-funnel.mjs
+      - crypto-market-monitor-full-source/scripts/analyze-bybit-risk-decisions.mjs
       - crypto-market-monitor-full-source/validation/bybit-validation-trigger.txt
   workflow_dispatch:
 
@@ -78,6 +79,10 @@ jobs:
       - name: Analyze BTCUSDT V1.2 yearly signal funnel
         working-directory: crypto-market-monitor-full-source
         run: node scripts/analyze-bybit-signal-funnel.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-signal-funnel.json
+
+      - name: Analyze BTCUSDT V1.2 yearly risk decisions
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/analyze-bybit-risk-decisions.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-risk-decisions.json
 
       - name: Run frozen BTCUSDT V1.2 robustness matrix
         working-directory: crypto-market-monitor-full-source
