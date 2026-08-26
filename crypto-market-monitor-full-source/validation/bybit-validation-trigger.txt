@@ -1,2 +1,2 @@
-run=23
-reason=RED test for trade entry regime metadata attribution
+run=24
+reason=GREEN verification for trade entry regime metadata attribution
