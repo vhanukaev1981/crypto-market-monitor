@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findHourlyGaps, splitContiguousHourlySegments } from '../algo/hourly-segments.mjs';
+import { findHourlyGaps, splitContiguousHourlySegments, selectEligibleHourlySegments } from '../algo/hourly-segments.mjs';
 
 function c(h) {
   return {time:new Date(Date.UTC(2024,0,1,h)).toISOString(),open:100,high:101,low:99,close:100,volume:1};
@@ -20,6 +20,14 @@ test('splits candles into contiguous hourly segments without fabricating data', 
   assert.deepEqual(segments.map(s=>s.length),[2,3]);
   assert.equal(segments[0][0].time,c(0).time);
   assert.equal(segments[1][0].time,c(5).time);
+});
+
+test('selects only segments with enough hourly history for the configured warmup', () => {
+  const short=Array.from({length:4799},(_,i)=>c(i));
+  const long=Array.from({length:4800},(_,i)=>c(6000+i));
+  const selected=selectEligibleHourlySegments([short,long],{minHours:4800});
+  assert.equal(selected.length,1);
+  assert.equal(selected[0].length,4800);
 });
 
 test('rejects duplicate or backward timestamps', () => {
