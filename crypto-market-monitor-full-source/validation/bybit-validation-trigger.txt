@@ -1,2 +1,2 @@
-run=7
-reason=RED test for safe duplicate boundary handling in Bybit MT4 importer
+run=8
+reason=GREEN regression and Bybit MT4 BTC/ETH validation after safe identical-boundary dedupe
