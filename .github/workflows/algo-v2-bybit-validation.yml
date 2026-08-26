@@ -59,13 +59,13 @@ jobs:
             echo "${symbol} 60m rows: $(wc -l < archive/${symbol}-60m.csv)"
           done
 
-      - name: Validate BTCUSDT on direct Bybit 60m archive
+      - name: Validate BTCUSDT on clean contiguous Bybit 60m segments
         working-directory: crypto-market-monitor-full-source
-        run: node scripts/run-bybit-mt4-validation.mjs --symbol BTCUSDT --source-minutes 60 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT.json
+        run: node scripts/run-bybit-mt4-segment-validation.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT.json
 
-      - name: Validate ETHUSDT on direct Bybit 60m archive
+      - name: Validate ETHUSDT on clean contiguous Bybit 60m segments
         working-directory: crypto-market-monitor-full-source
-        run: node scripts/run-bybit-mt4-validation.mjs --symbol ETHUSDT --source-minutes 60 --input archive/ETHUSDT-60m.csv --out validation-results/ETHUSDT.json
+        run: node scripts/run-bybit-mt4-segment-validation.mjs --symbol ETHUSDT --min-hours 4800 --input archive/ETHUSDT-60m.csv --out validation-results/ETHUSDT.json
 
       - name: Print summaries
         if: always()
@@ -82,6 +82,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: algo-v2-bybit-mt4-60m-validation
+          name: algo-v2-bybit-mt4-60m-segment-validation
           path: crypto-market-monitor-full-source/validation-results/*.json
           if-no-files-found: warn
