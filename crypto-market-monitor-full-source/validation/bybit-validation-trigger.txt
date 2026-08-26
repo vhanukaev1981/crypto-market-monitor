@@ -1,2 +1,2 @@
-run=13
-reason=RED test for minimum 4800-hour contiguous segment eligibility gate
+run=14
+reason=RED test for continuous mark-to-market max position exposure invariant
