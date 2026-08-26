@@ -6,6 +6,7 @@ import { evaluateRisk } from './risk-engine.mjs';
 import { applyHardExposureTrim } from './exposure-trim.mjs';
 import { estimateMarketFill } from './execution-costs.mjs';
 import { calculatePerformance } from './backtest-metrics.mjs';
+import { trendEfficiency, positiveSlopeShare, finiteDelta } from './trend-persistence-features.mjs';
 
 function normalizeCandles(candles) {
   if (!Array.isArray(candles)) throw new Error('INVALID_CANDLES');
@@ -26,6 +27,10 @@ function entryMetadata(position) {
     entryEma50SlopePct: position.entryEma50SlopePct,
     entryDistanceToEma20Atr: position.entryDistanceToEma20Atr,
     entryDistanceToEma50Atr: position.entryDistanceToEma50Atr,
+    entryEfficiency24: position.entryEfficiency24,
+    entryEfficiency72: position.entryEfficiency72,
+    entryEma20PositiveSlopeShare24: position.entryEma20PositiveSlopeShare24,
+    entryAdxDelta12: position.entryAdxDelta12,
   };
 }
 
@@ -195,6 +200,11 @@ export function runTrendPullbackBacktest({
       fill=estimateMarketFill({side:'BUY',referencePrice:c.close,qty,spreadBps,slippageBps,feeBps});
     }
     if (qty<=0) { equityCurve.push(cash); continue; }
+    const efficiency24=trendEfficiency(closes.slice(Math.max(0,i-24),i+1),24);
+    const efficiency72=trendEfficiency(closes.slice(Math.max(0,i-72),i+1),72);
+    const ema20PositiveSlopeShare24=positiveSlopeShare(ema20.slice(Math.max(0,i-24),i+1),24);
+    const adxDelta12=finiteDelta(adx.slice(i-12,i+1),12,12);
+    if (![efficiency24,efficiency72,ema20PositiveSlopeShare24,adxDelta12].every(Number.isFinite)) throw new Error('INVALID_TREND_PERSISTENCE_FEATURES');
     totalExecutionCosts += qty * (fill.price - c.close) + fill.fee;
     cash += fill.cashDelta;
     position={
@@ -217,6 +227,10 @@ export function runTrendPullbackBacktest({
       entryEma50SlopePct:ema50[i]!==0?ema50Slope/ema50[i]*100:0,
       entryDistanceToEma20Atr:atr[i]!==0?(c.close-ema20[i])/atr[i]:0,
       entryDistanceToEma50Atr:atr[i]!==0?(c.close-ema50[i])/atr[i]:0,
+      entryEfficiency24:efficiency24,
+      entryEfficiency72:efficiency72,
+      entryEma20PositiveSlopeShare24:ema20PositiveSlopeShare24,
+      entryAdxDelta12:adxDelta12,
     };
     const eqAfter=cash+position.qty*c.close;
     const entryExposurePct=(position.qty*c.close/eqAfter)*100;
