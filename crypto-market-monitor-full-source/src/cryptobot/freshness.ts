@@ -7,6 +7,7 @@ export type FreshnessPolicy = {
 
 export const FRESHNESS_POLICIES = {
   algobot: { freshSeconds: 15, staleSeconds: 60 },
+  algobotResearch: { freshSeconds: 21_600, staleSeconds: 86_400 },
   risk: { freshSeconds: 15, staleSeconds: 60 },
   reconciliation: { freshSeconds: 60, staleSeconds: 180 },
   bybitAccount: { freshSeconds: 75, staleSeconds: 180 },
