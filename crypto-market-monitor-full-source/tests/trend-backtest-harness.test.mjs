@@ -127,10 +127,15 @@ test('harness fails closed when hard exposure cap is not above entry allocation 
 test('research daily EMA200 overextension gate is opt-in and auditable without changing default V1.2 behavior', () => {
   const candles=makeTrend(7000);
   const baseline=runTrendPullbackBacktest({candles,spreadBps:0,slippageBps:0,feeBps:0});
+  const explicitDisabled=runTrendPullbackBacktest({candles,spreadBps:0,slippageBps:0,feeBps:0,researchMaxDailyDistanceAboveEma200Pct:null});
   const gated=runTrendPullbackBacktest({candles,spreadBps:0,slippageBps:0,feeBps:0,researchMaxDailyDistanceAboveEma200Pct:0});
   assert.ok(baseline.trades.length>0);
-  assert.equal(gated.trades.length,0);
+  assert.deepEqual(explicitDisabled.trades,baseline.trades);
+  assert.deepEqual(explicitDisabled.metrics,baseline.metrics);
+  assert.deepEqual(explicitDisabled.signalFunnelEvents,baseline.signalFunnelEvents);
   assert.deepEqual(baseline.researchFilterEvents,[]);
+  assert.equal(gated.trades.length,0);
+  assert.equal(gated.riskEvents.length,0);
   assert.ok(gated.researchFilterEvents.length>0);
   for(const event of gated.researchFilterEvents.slice(0,10)){
     assert.equal(event.reason,'DAILY_EMA200_OVEREXTENSION');
@@ -139,7 +144,8 @@ test('research daily EMA200 overextension gate is opt-in and auditable without c
     assert.equal(event.thresholdPct,0);
     assert.match(event.time,/^\d{4}-\d{2}-\d{2}T/);
   }
-  assert.equal(gated.signalFunnelEvents.filter(e=>e.action==='BUY_CANDIDATE').length,baseline.signalFunnelEvents.filter(e=>e.action==='BUY_CANDIDATE').length);
+  const gatedBuyCandidates=gated.signalFunnelEvents.filter(e=>e.action==='BUY_CANDIDATE').length;
+  assert.equal(gated.researchFilterEvents.length,gatedBuyCandidates);
 });
 
 test('research daily EMA200 overextension gate rejects invalid thresholds', () => {
