@@ -1,7 +1,7 @@
 import { RiskStatusSchema, type RiskStatus } from "../domain.ts";
 import { FRESHNESS_POLICIES } from "../freshness.ts";
 import type { Row } from "../repository.ts";
-import { bool, iso, latestTimestamp, num, row, severityToAlert, sourceMeta, text } from "./shared.ts";
+import { bool, iso, latestTimestamp, num, row, severityToAlert, sourceMeta } from "./shared.ts";
 
 export function mapRiskStatus(
   dashboard: Row | null,
@@ -11,17 +11,18 @@ export function mapRiskStatus(
   nowMs = Date.now(),
 ): RiskStatus {
   const risk = row(botStatuses[0]?.risk);
+  const runtimeStopped = botStatuses.length > 0 && botStatuses.every((item) => item.enabled !== true || item.status === "stopped" || item.kill_switch === true);
   const referenceCapital = num(risk.reference_capital_usdt ?? dashboard?.reference_capital_usdt);
-  const realizedToday = num(dashboard?.realized_today);
+  const realizedToday = runtimeStopped ? null : num(dashboard?.realized_today);
   const dailyLossPct = referenceCapital && realizedToday !== null
     ? Math.max(0, (-realizedToday / referenceCapital) * 100)
     : null;
-  const dailyLossLimit = num(risk.max_daily_loss_usdt);
+  const dailyLossLimit = runtimeStopped ? null : num(risk.max_daily_loss_usdt);
   const dailyLossLimitPct = referenceCapital && dailyLossLimit !== null
     ? (dailyLossLimit / referenceCapital) * 100
     : null;
-  const openPositions = num(dashboard?.open_positions);
-  const protectedPositions = num(dashboard?.protected_positions);
+  const openPositions = runtimeStopped ? null : num(dashboard?.open_positions);
+  const protectedPositions = runtimeStopped ? null : num(dashboard?.protected_positions);
   const reconciliationState = openPositions === null || protectedPositions === null
     ? "unknown"
     : openPositions === protectedPositions
@@ -30,7 +31,7 @@ export function mapRiskStatus(
         ? "attention"
         : "mismatch";
 
-  const alerts = riskEvents.map((event) => ({
+  const alerts = runtimeStopped ? [] : riskEvents.map((event) => ({
     id: String(event.id ?? ""),
     severity: severityToAlert(event.severity),
     title: String(event.code ?? "אירוע סיכון"),
@@ -41,7 +42,7 @@ export function mapRiskStatus(
 
   const observedAt = latestTimestamp([
     ...botStatuses.map((item) => item.last_run_at ?? item.updated_at),
-    ...riskEvents.map((item) => item.created_at),
+    ...(runtimeStopped ? [] : riskEvents.map((item) => item.created_at)),
   ]);
 
   return RiskStatusSchema.parse({
@@ -49,7 +50,7 @@ export function mapRiskStatus(
     daily_loss_limit_pct: dailyLossLimitPct,
     drawdown_pct: null,
     max_drawdown_pct: null,
-    exposure_usd: num(dashboard?.open_exposure_usdt),
+    exposure_usd: runtimeStopped ? null : num(dashboard?.open_exposure_usdt),
     max_exposure_usd: null,
     open_positions: openPositions === null ? null : Math.max(0, Math.trunc(openPositions)),
     max_open_positions: num(risk.max_open_positions) === null ? null : Math.max(0, Math.trunc(num(risk.max_open_positions)!)),
@@ -57,6 +58,6 @@ export function mapRiskStatus(
     native_protection_required: bool(risk.require_native_protection),
     reconciliation_state: reconciliationState,
     recent_events: alerts,
-    source: sourceMeta(observedAt, FRESHNESS_POLICIES.risk, sourceError ? "fault" : "ok", nowMs),
+    source: sourceMeta(observedAt, FRESHNESS_POLICIES.risk, sourceError ? "fault" : runtimeStopped ? "attention" : "ok", nowMs),
   });
 }
