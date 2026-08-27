@@ -19,6 +19,18 @@ test('paginates backwards, deduplicates and returns ascending 1H candles', async
   assert.deepEqual(out[0],{timeMs:1000,time:'1970-01-01T00:00:01.000Z',open:10,high:11,low:9,close:10.5,volume:1});
 });
 
+test('fails closed on conflicting duplicate candles across pages', async () => {
+  const pages=[
+    response([['3000','30','31','29','30.5','3','0'],['2000','20','21','19','20.5','2','0']]),
+    response([['2000','20','22','19','20.5','2','0'],['1000','10','11','9','10.5','1','0']]),
+  ];
+  const fetchImpl=async()=>pages.shift() ?? response([]);
+  await assert.rejects(
+    ()=>fetchBybitKlines({symbol:'BTCUSDT',startTime:1000,endTime:3000,pageLimit:2,baseUrls:['https://example.test'],fetchImpl,sleepMs:0}),
+    /CONFLICTING_DUPLICATE_KLINE:2000/,
+  );
+});
+
 test('falls through blocked official Bybit endpoints until one succeeds', async () => {
   const calls=[];
   const fetchImpl=async url=>{
