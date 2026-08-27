@@ -61,7 +61,14 @@ export async function fetchBybitKlines({
       if (![timeMs,open,high,low,close,volume].every(Number.isFinite)) throw new Error('INVALID_BYBIT_KLINE_ROW');
       minTs = Math.min(minTs,timeMs);
       if (timeMs < startTime || timeMs > endTime) continue;
-      rows.set(timeMs,{timeMs,time:new Date(timeMs).toISOString(),open,high,low,close,volume});
+      const row={timeMs,time:new Date(timeMs).toISOString(),open,high,low,close,volume};
+      const existing=rows.get(timeMs);
+      if (existing) {
+        const same=['open','high','low','close','volume'].every(key=>existing[key]===row[key]);
+        if (!same) throw new Error(`CONFLICTING_DUPLICATE_KLINE:${timeMs}`);
+      } else {
+        rows.set(timeMs,row);
+      }
     }
     if (!Number.isFinite(minTs) || minTs <= startTime) break;
     const nextEnd = minTs - 1;
