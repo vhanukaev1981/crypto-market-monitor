@@ -14,3 +14,20 @@ export function assertSpotResearchWindow({startMonth,endMonth}={}){
   if(end>=monthIndex('2025-01')) throw new Error('OOS_WINDOW_LOCKED');
   return {startMonth,endMonth,oosLocked:true};
 }
+
+export function spotResearchTimeRange({startMonth,endMonth}={}){
+  assertSpotResearchWindow({startMonth,endMonth});
+  const [startYear,startMo]=startMonth.split('-').map(Number);
+  const [endYear,endMo]=endMonth.split('-').map(Number);
+  const startMs=Date.UTC(startYear,startMo-1,1,0,0,0,0);
+  const nextMonthMs=Date.UTC(endYear,endMo,1,0,0,0,0);
+  const endRequestMs=nextMonthMs-1;
+  const expectedLastMs=nextMonthMs-3600000;
+  return {
+    startMs,
+    endRequestMs,
+    expectedFirst:new Date(startMs).toISOString(),
+    expectedLast:new Date(expectedLastMs).toISOString(),
+    expectedCandleCount:(expectedLastMs-startMs)/3600000+1,
+  };
+}
