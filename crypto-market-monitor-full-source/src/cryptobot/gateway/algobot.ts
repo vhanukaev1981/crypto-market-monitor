@@ -48,7 +48,7 @@ export function mapAlgoBotStatus(
       latest_decisions: [],
       source: sourceMeta(
         observedAt,
-        FRESHNESS_POLICIES.algobot,
+        FRESHNESS_POLICIES.algobotResearch,
         sourceError ? "fault" : "ok",
         nowMs,
       ),
