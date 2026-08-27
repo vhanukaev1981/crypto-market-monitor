@@ -104,7 +104,7 @@ export const BybitBotSchema = z.object({
   id: z.string(),
   kind: z.enum(["spot_grid", "dca", "other"]),
   symbol: NullableString,
-  status: z.enum(["running", "paused", "stopped", "unknown"]),
+  status: z.enum(["running", "paused", "stopped", "detected", "unknown"]),
   invested_usd: NullableNumber,
   equity_usd: NullableNumber,
   total_pnl_usd: NullableNumber,
@@ -113,6 +113,7 @@ export const BybitBotSchema = z.object({
   range_low: NullableNumber,
   range_high: NullableNumber,
   grid_count: z.number().int().nonnegative().nullable(),
+  observed_eth_quantity: NullableNumber.optional(),
   observed_at: z.string().datetime().nullable(),
 });
 
@@ -168,6 +169,7 @@ export const PortfolioOutputSchema = z.object({
     account_type: z.string(),
     usd_value: NullableNumber,
   })),
+  assets_scope: z.enum(["all_accounts", "unified_only", "unknown"]),
   assets: z.array(PortfolioAssetSchema),
   positions: z.array(PortfolioPositionSchema),
   recent_trades: z.array(PortfolioTradeSchema),
