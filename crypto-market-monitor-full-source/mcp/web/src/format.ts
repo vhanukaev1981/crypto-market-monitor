@@ -30,7 +30,7 @@ export function ageLabel(ageSeconds: number | null | undefined): string {
 
 export function freshnessHebrew(value: string | null | undefined): string {
   if (value === "fresh") return "מידע עדכני";
-  if (value === "aging") return "מתעדכן";
+  if (value === "aging" || value === "delayed") return "מתעדכן";
   if (value === "stale") return "מידע מיושן";
   return "מקור לא זמין";
 }
