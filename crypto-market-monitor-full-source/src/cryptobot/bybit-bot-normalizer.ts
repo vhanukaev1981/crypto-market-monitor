@@ -24,6 +24,13 @@ function isBotAccountType(value: unknown): boolean {
   return normalized.includes("bot") || normalized === "tradingbot";
 }
 
+function detectedBotKind(category: string): "spot_grid" | "dca" | "other" {
+  const normalized = category.toLowerCase();
+  if (normalized.includes("grid")) return "spot_grid";
+  if (normalized.includes("dca")) return "dca";
+  return "other";
+}
+
 export function normalizeBybitBotVisibility(snapshot: SnapshotLike, nowMs = Date.now()): BybitBotsOutput {
   const account = asRow(snapshot.account);
   const breakdown = Array.isArray(account.account_type_breakdown)
@@ -32,15 +39,50 @@ export function normalizeBybitBotVisibility(snapshot: SnapshotLike, nowMs = Date
   const botRows = breakdown.filter((row) => isBotAccountType(row.type ?? row.account_type));
   const values = botRows.map((row) => finiteNumber(row.usd_value ?? row.equity_usd)).filter((value): value is number => value !== null);
   const totalBotEquity = values.length ? values.reduce((sum, value) => sum + value, 0) : null;
+
+  const ethBreakdown = Array.isArray(account.eth_breakdown)
+    ? account.eth_breakdown.map(asRow)
+    : [];
+  const detectedRows = ethBreakdown.filter((row) =>
+    isBotAccountType(row.account_type) && typeof row.category === "string" && row.category.trim().length > 0
+  );
+  const unique = new Map<string, Row>();
+  for (const row of detectedRows) unique.set(String(row.category), row);
+
   const observedAt = typeof snapshot.checked_at === "string" ? snapshot.checked_at : null;
+  const bots = [...unique.entries()].map(([category, row], index) => {
+    const kind = detectedBotKind(category);
+    return {
+      id: `bybit-${category.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${index}`,
+      kind,
+      symbol: kind === "spot_grid" ? "ETHUSDT" : null,
+      status: "detected" as const,
+      invested_usd: null,
+      equity_usd: null,
+      total_pnl_usd: null,
+      total_pnl_pct: null,
+      grid_profit_usd: null,
+      range_low: null,
+      range_high: null,
+      grid_count: null,
+      observed_eth_quantity: finiteNumber(row.quantity),
+      observed_at: observedAt,
+    };
+  });
+
   const freshness = computeFreshness(observedAt, FRESHNESS_POLICIES.bybitAccount, nowMs);
   const hasError = Boolean(snapshot.last_error);
+  const detailsStatus = bots.length
+    ? "allocation_detected_performance_unavailable"
+    : totalBotEquity === null
+      ? "bot_account_not_reported"
+      : "account_level_only";
 
   return BybitBotsOutputSchema.parse({
-    bots: [],
+    bots,
     total_bot_account_equity_usd: totalBotEquity,
     details_available: false,
-    details_status: totalBotEquity === null ? "bot_account_not_reported" : "account_level_only",
+    details_status: detailsStatus,
     source: {
       observed_at: observedAt,
       age_seconds: freshness.ageSeconds,
