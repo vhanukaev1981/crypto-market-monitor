@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { fetchBybitKlines } from '../algo/bybit-kline-fetcher.mjs';
+import { Readable } from 'node:stream';
+import { createGunzip } from 'node:zlib';
+import { tradesStreamToHourlyCandles } from '../algo/bybit-trade-stream-import.mjs';
+import { monthKeys, mergeHourlyCandleChunks, spotArchiveUrl } from '../algo/bybit-spot-archive.mjs';
 import { validateStrictHourlyCandles } from '../algo/hourly-data-quality.mjs';
 import { spotResearchTimeRange } from '../algo/spot-research-window.mjs';
 import { runTrendPullbackBacktest } from '../algo/trend-pullback-backtest.mjs';
@@ -20,10 +23,12 @@ const symbol=arg('symbol','BTCUSDT');
 const startMonth=arg('start-month','2022-11');
 const endMonth=arg('end-month','2024-12');
 const out=arg('out');
-const pageLimit=200;
+const maxCompressedGb=Number(arg('max-compressed-gb','20'));
 if(!/^[A-Z0-9]{3,20}$/.test(symbol)) throw new Error('INVALID_SYMBOL');
+if(!Number.isFinite(maxCompressedGb)||maxCompressedGb<=0) throw new Error('INVALID_DOWNLOAD_CAP');
 
 const range=spotResearchTimeRange({startMonth,endMonth});
+const maxCompressedBytes=maxCompressedGb*1024**3;
 
 const parameters={
   startingEquity:100000,
@@ -39,15 +44,35 @@ const parameters={
   maxSlippageBps:10,
 };
 
-const fetched=await fetchBybitKlines({
-  symbol,
-  startTime:range.startMs,
-  endTime:range.endRequestMs,
-  interval:'60',
-  category:'spot',
-  pageLimit,
-});
-const validated=validateStrictHourlyCandles(fetched,{
+const months=monthKeys(startMonth,endMonth);
+const manifest=[];
+let knownCompressedBytes=0;
+for(const month of months){
+  const url=spotArchiveUrl({symbol,month});
+  const head=await fetch(url,{method:'HEAD',redirect:'follow'});
+  if(!head.ok) throw new Error(`SPOT_ARCHIVE_HEAD_FAILED:${month}:${head.status}`);
+  const len=Number(head.headers.get('content-length'));
+  if(!Number.isFinite(len)||len<=0) throw new Error(`SPOT_ARCHIVE_CONTENT_LENGTH_REQUIRED:${month}`);
+  knownCompressedBytes+=len;
+  if(knownCompressedBytes>maxCompressedBytes) throw new Error(`SPOT_ARCHIVE_TOO_LARGE:${knownCompressedBytes}`);
+  manifest.push({month,url,contentLength:len});
+}
+
+const chunks=[];
+for(const item of manifest){
+  const res=await fetch(item.url,{redirect:'follow'});
+  if(!res.ok||!res.body) throw new Error(`SPOT_ARCHIVE_DOWNLOAD_FAILED:${item.month}:${res.status}`);
+  const nodeBody=Readable.fromWeb(res.body);
+  const gunzip=createGunzip();
+  nodeBody.pipe(gunzip);
+  const hourly=await tradesStreamToHourlyCandles(gunzip,{symbol});
+  if(hourly.length<24*20) throw new Error(`SPOT_ARCHIVE_MONTH_TOO_SPARSE:${item.month}:${hourly.length}`);
+  chunks.push(hourly);
+  console.error(`${item.month}: ${hourly.length} hourly candles`);
+}
+
+const merged=mergeHourlyCandleChunks(chunks);
+const validated=validateStrictHourlyCandles(merged,{
   expectedStartTime:range.expectedFirst,
   expectedEndTime:range.expectedLast,
 });
@@ -100,8 +125,9 @@ for(const def of foldDefs){
 const summary={
   engine:'ALGO_V2_BYBIT_SPOT_RESEARCH_V1_2',
   sourceMarket:'BYBIT_SPOT',
-  source:'BYBIT_V5_PUBLIC_KLINE',
+  source:'BYBIT_PUBLIC_SPOT_TRADE_ARCHIVES',
   provenance:'BYBIT_SPOT',
+  conversion:'TRADE_STREAM_TO_OHLCV_1H',
   category:'spot',
   interval:'1h',
   symbol,
@@ -111,10 +137,13 @@ const summary={
   oosWindow:'2025-01 onward',
   parameters,
   acquisition:{
-    pagination:'BACKWARD_END_TIME',
-    pageLimit,
+    archiveBase:'https://public.bybit.com/spot',
+    monthCount:months.length,
+    maxCompressedGb,
+    knownCompressedBytes,
     syntheticRepair:false,
     conflictingDuplicatePolicy:'FAIL_CLOSED',
+    manifest,
   },
   data:{
     ...validated.metadata,
