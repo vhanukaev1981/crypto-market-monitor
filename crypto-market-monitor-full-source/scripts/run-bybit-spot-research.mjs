@@ -1,15 +1,13 @@
 import fs from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { Readable } from 'node:stream';
-import { createGunzip } from 'node:zlib';
-import { tradesStreamToHourlyCandles } from '../algo/bybit-trade-stream-import.mjs';
-import { monthKeys, mergeHourlyCandleChunks } from '../algo/bybit-spot-archive.mjs';
-import { assertSpotResearchWindow } from '../algo/spot-research-window.mjs';
-import { findHourlyGaps } from '../algo/hourly-segments.mjs';
+import { fetchBybitKlines } from '../algo/bybit-kline-fetcher.mjs';
+import { validateStrictHourlyCandles } from '../algo/hourly-data-quality.mjs';
+import { spotResearchTimeRange } from '../algo/spot-research-window.mjs';
 import { runTrendPullbackBacktest } from '../algo/trend-pullback-backtest.mjs';
 import { annotateTradesWithStructuralPersistence } from '../algo/structural-trade-annotation.mjs';
 import { summarizeTradeAttribution } from '../algo/trade-attribution.mjs';
 import { summarizeRiskDecisions } from '../algo/risk-decision-attribution.mjs';
+import { summarizeSignalFunnel } from '../algo/signal-funnel.mjs';
 import { summarizeTradeFeatureOutcomes } from '../algo/trade-feature-outcomes.mjs';
 import { summarizeStructuralBuckets } from '../algo/structural-bucket-attribution.mjs';
 
@@ -22,10 +20,10 @@ const symbol=arg('symbol','BTCUSDT');
 const startMonth=arg('start-month','2022-11');
 const endMonth=arg('end-month','2024-12');
 const out=arg('out');
-const maxCompressedGb=Number(arg('max-compressed-gb','20'));
+const pageLimit=200;
 if(!/^[A-Z0-9]{3,20}$/.test(symbol)) throw new Error('INVALID_SYMBOL');
-if(!Number.isFinite(maxCompressedGb)||maxCompressedGb<=0) throw new Error('INVALID_DOWNLOAD_CAP');
-assertSpotResearchWindow({startMonth,endMonth});
+
+const range=spotResearchTimeRange({startMonth,endMonth});
 
 const parameters={
   startingEquity:100000,
@@ -41,37 +39,22 @@ const parameters={
   maxSlippageBps:10,
 };
 
-const months=monthKeys(startMonth,endMonth);
-const base=`https://public.bybit.com/spot/${symbol}`;
-const manifest=[];
-let knownCompressedBytes=0;
-
-for(const month of months){
-  const url=`${base}/${symbol}-${month}.csv.gz`;
-  const head=await fetch(url,{method:'HEAD',redirect:'follow'});
-  if(!head.ok) throw new Error(`SPOT_ARCHIVE_HEAD_FAILED:${month}:${head.status}`);
-  const len=Number(head.headers.get('content-length'));
-  if(Number.isFinite(len)&&len>0) knownCompressedBytes+=len;
-  manifest.push({month,url,contentLength:Number.isFinite(len)&&len>0?len:null});
+const fetched=await fetchBybitKlines({
+  symbol,
+  startTime:range.startMs,
+  endTime:range.endRequestMs,
+  interval:'60',
+  category:'spot',
+  pageLimit,
+});
+const validated=validateStrictHourlyCandles(fetched,{
+  expectedStartTime:range.expectedFirst,
+  expectedEndTime:range.expectedLast,
+});
+if(validated.metadata.candleCount!==range.expectedCandleCount) {
+  throw new Error(`UNEXPECTED_HOURLY_CANDLE_COUNT:${validated.metadata.candleCount}:${range.expectedCandleCount}`);
 }
-if(knownCompressedBytes>maxCompressedGb*1024**3) throw new Error(`SPOT_ARCHIVE_TOO_LARGE:${knownCompressedBytes}`);
-
-const chunks=[];
-for(const item of manifest){
-  const res=await fetch(item.url,{redirect:'follow'});
-  if(!res.ok||!res.body) throw new Error(`SPOT_ARCHIVE_DOWNLOAD_FAILED:${item.month}:${res.status}`);
-  const nodeBody=Readable.fromWeb(res.body);
-  const gunzip=createGunzip();
-  nodeBody.pipe(gunzip);
-  const hourly=await tradesStreamToHourlyCandles(gunzip,{symbol});
-  if(hourly.length<24*20) throw new Error(`SPOT_ARCHIVE_MONTH_TOO_SPARSE:${item.month}:${hourly.length}`);
-  chunks.push(hourly);
-  console.error(`${item.month}: ${hourly.length} hourly candles`);
-}
-
-const candles=mergeHourlyCandleChunks(chunks);
-const gaps=findHourlyGaps(candles);
-if(gaps.length) throw new Error(`SPOT_HOURLY_GAPS:${JSON.stringify(gaps.slice(0,20))}`);
+const candles=validated.candles;
 if(candles.length<4800) throw new Error(`SPOT_INSUFFICIENT_HISTORY:${candles.length}`);
 
 const firstMs=Date.parse(candles[0].time);
@@ -89,6 +72,7 @@ for(const def of foldDefs){
   const result=runTrendPullbackBacktest({candles:foldCandles,tradingStartTime:new Date(def.startMs).toISOString(),...parameters});
   if(result.status!=='COMPLETED') throw new Error(`${def.label}_${result.status}`);
   const annotated=annotateTradesWithStructuralPersistence({candles:foldCandles,trades:result.trades});
+  const attribution=summarizeTradeAttribution(result.trades);
   folds.push({
     label:def.label,
     tradingStartTime:new Date(def.startMs).toISOString(),
@@ -104,7 +88,9 @@ for(const def of foldDefs){
     totalExecutionCosts:result.totalExecutionCosts,
     maxObservedExposurePct:result.maxObservedExposurePct,
     maxPostControlExposurePct:result.maxPostControlExposurePct,
-    attribution:summarizeTradeAttribution(result.trades),
+    attribution,
+    exitReasonAttribution:attribution.byExitReason,
+    signalFunnel:summarizeSignalFunnel(result.signalFunnelEvents),
     risk:summarizeRiskDecisions(result.riskEvents),
     featureOutcomes:summarizeTradeFeatureOutcomes(annotated),
     structuralBuckets:summarizeStructuralBuckets(annotated),
@@ -114,20 +100,27 @@ for(const def of foldDefs){
 const summary={
   engine:'ALGO_V2_BYBIT_SPOT_RESEARCH_V1_2',
   sourceMarket:'BYBIT_SPOT',
-  source:'public.bybit.com/spot',
+  source:'BYBIT_V5_PUBLIC_KLINE',
+  provenance:'BYBIT_SPOT',
+  category:'spot',
+  interval:'1h',
   symbol,
   startMonth,
   endMonth,
   oosLocked:true,
   oosWindow:'2025-01 onward',
   parameters,
+  acquisition:{
+    pagination:'BACKWARD_END_TIME',
+    pageLimit,
+    syntheticRepair:false,
+    conflictingDuplicatePolicy:'FAIL_CLOSED',
+  },
   data:{
-    candleCount:candles.length,
-    first:candles[0]?.time??null,
-    last:candles.at(-1)?.time??null,
-    gapCount:gaps.length,
-    knownCompressedBytes,
-    manifest,
+    ...validated.metadata,
+    expectedCandleCount:range.expectedCandleCount,
+    expectedFirst:range.expectedFirst,
+    expectedLast:range.expectedLast,
   },
   folds,
 };
