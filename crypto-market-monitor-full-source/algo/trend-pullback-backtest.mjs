@@ -49,8 +49,10 @@ export function runTrendPullbackBacktest({
   maxSlippageBps=10,
   pullbackLookback=20,
   tradingStartTime=null,
+  researchMaxDailyDistanceAboveEma200Pct=null,
 }={}) {
   if (!Number.isFinite(maxPositionPct) || maxPositionPct<=0 || !Number.isFinite(hardExposurePct) || hardExposurePct<=maxPositionPct) throw new Error('INVALID_EXPOSURE_LIMITS');
+  if (researchMaxDailyDistanceAboveEma200Pct!==null && (!Number.isFinite(researchMaxDailyDistanceAboveEma200Pct) || researchMaxDailyDistanceAboveEma200Pct<0)) throw new Error('INVALID_RESEARCH_DAILY_EMA200_DISTANCE_GATE');
   let tradingStartMs=null;
   let normalizedTradingStartTime=null;
   if (tradingStartTime!=null) {
@@ -59,10 +61,10 @@ export function runTrendPullbackBacktest({
     normalizedTradingStartTime=new Date(tradingStartMs).toISOString();
   }
   const rows=normalizeCandles(candles);
-  if (rows.length < 4800) return {status:'INSUFFICIENT_HISTORY', trades:[], equityCurve:[], startingEquity, endingEquity:startingEquity, maxObservedExposurePct:0, maxPostControlExposurePct:0, exposureControlEvents:[], signalFunnelEvents:[], riskEvents:[], tradingStartTime:normalizedTradingStartTime};
+  if (rows.length < 4800) return {status:'INSUFFICIENT_HISTORY', trades:[], equityCurve:[], startingEquity, endingEquity:startingEquity, maxObservedExposurePct:0, maxPostControlExposurePct:0, exposureControlEvents:[], signalFunnelEvents:[], riskEvents:[], researchFilterEvents:[], tradingStartTime:normalizedTradingStartTime};
   const h4=aggregateCompletedCandles(rows,{timeframeHours:4});
   const d1=aggregateCompletedCandles(rows,{timeframeHours:24});
-  if (h4.length<200 || d1.length<200) return {status:'INSUFFICIENT_HISTORY', trades:[], equityCurve:[], startingEquity, endingEquity:startingEquity, maxObservedExposurePct:0, maxPostControlExposurePct:0, exposureControlEvents:[], signalFunnelEvents:[], riskEvents:[], tradingStartTime:normalizedTradingStartTime};
+  if (h4.length<200 || d1.length<200) return {status:'INSUFFICIENT_HISTORY', trades:[], equityCurve:[], startingEquity, endingEquity:startingEquity, maxObservedExposurePct:0, maxPostControlExposurePct:0, exposureControlEvents:[], signalFunnelEvents:[], riskEvents:[], researchFilterEvents:[], tradingStartTime:normalizedTradingStartTime};
 
   const closes=rows.map(c=>c.close);
   const ema20=emaSeries(closes,20), ema50=emaSeries(closes,50), ema200=emaSeries(closes,200);
@@ -75,7 +77,7 @@ export function runTrendPullbackBacktest({
 
   let cash=startingEquity, position=null, peak=startingEquity, dayStartEquity=startingEquity, currentDay=null;
   let maxObservedExposurePct=0, maxPostControlExposurePct=0, totalExecutionCosts=0;
-  const trades=[], equityCurve=[], riskEvents=[], exposureControlEvents=[], signalFunnelEvents=[];
+  const trades=[], equityCurve=[], riskEvents=[], exposureControlEvents=[], signalFunnelEvents=[], researchFilterEvents=[];
 
   for (let i=0;i<rows.length;i++) {
     const c=rows[i], decisionMs=Date.parse(c.time)+3600000;
@@ -164,6 +166,17 @@ export function runTrendPullbackBacktest({
       confirmation4h,
     });
     if (signal.action!=='BUY_CANDIDATE') { equityCurve.push(cash); continue; }
+    const dailyDistanceAboveEma200Pct=((df.close/df.e200)-1)*100;
+    if (researchMaxDailyDistanceAboveEma200Pct!==null && dailyDistanceAboveEma200Pct>researchMaxDailyDistanceAboveEma200Pct) {
+      researchFilterEvents.push({
+        time:c.time,
+        reason:'DAILY_EMA200_OVEREXTENSION',
+        dailyDistanceAboveEma200Pct,
+        thresholdPct:researchMaxDailyDistanceAboveEma200Pct,
+      });
+      equityCurve.push(cash);
+      continue;
+    }
 
     const stopDistance=atrStopMult*atr[i];
     const riskBudget=markEquity*riskPct*signal.riskMultiplier;
@@ -240,5 +253,5 @@ export function runTrendPullbackBacktest({
   }
   const endingEquity=equityCurve.at(-1)??startingEquity;
   const metrics=calculatePerformance({startingEquity,equityCurve,trades});
-  return {status:'COMPLETED',startingEquity,endingEquity,trades,equityCurve,metrics,maxObservedExposurePct,maxPostControlExposurePct,totalExecutionCosts,riskEvents,exposureControlEvents,signalFunnelEvents,openPosition:position,tradingStartTime:normalizedTradingStartTime};
+  return {status:'COMPLETED',startingEquity,endingEquity,trades,equityCurve,metrics,maxObservedExposurePct,maxPostControlExposurePct,totalExecutionCosts,riskEvents,exposureControlEvents,signalFunnelEvents,researchFilterEvents,openPosition:position,tradingStartTime:normalizedTradingStartTime};
 }
