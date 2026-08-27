@@ -45,6 +45,19 @@ const parameters={
   maxSlippageBps:10,
 };
 
+// Frozen before candidate replay. 25% is the ex-ante structural bucket boundary;
+// 20% and 30% are sensitivity-only neighbors and must not be selected after results.
+const researchCandidate={
+  name:'DAILY_EMA200_OVEREXTENSION',
+  status:'UNFROZEN_RESEARCH_CANDIDATE',
+  thresholdPct:25,
+  sensitivityThresholdsPct:[20,25,30],
+  rationale:'Avoid long entries after the completed 1D trend is materially overextended above EMA200.',
+  usesCompletedHigherTimeframeOnly:true,
+  tuningAfterReplay:false,
+  blindOosOpened:false,
+};
+
 const months=monthKeys(startMonth,endMonth);
 const manifest=[];
 let knownCompressedBytes=0;
@@ -91,15 +104,19 @@ const foldDefs=[
   {label:'2024_VALIDATION',startMs:Date.UTC(2024,0,1),endMs:Date.UTC(2025,0,1)-3600000},
 ];
 
-const folds=[];
-for(const def of foldDefs){
+function runFold(def,{thresholdPct=null,detailed=true}={}){
   const foldCandles=candles.filter(c=>Date.parse(c.time)<=def.endMs);
-  if(!foldCandles.length || def.startMs>Date.parse(foldCandles.at(-1).time)) continue;
-  const result=runTrendPullbackBacktest({candles:foldCandles,tradingStartTime:new Date(def.startMs).toISOString(),...parameters});
+  if(!foldCandles.length || def.startMs>Date.parse(foldCandles.at(-1).time)) return null;
+  const gateArgs=thresholdPct===null?{}:{researchMaxDailyDistanceAboveEma200Pct:thresholdPct};
+  const result=runTrendPullbackBacktest({
+    candles:foldCandles,
+    tradingStartTime:new Date(def.startMs).toISOString(),
+    ...parameters,
+    ...gateArgs,
+  });
   if(result.status!=='COMPLETED') throw new Error(`${def.label}_${result.status}`);
-  const annotated=annotateTradesWithStructuralPersistence({candles:foldCandles,trades:result.trades});
-  const attribution=summarizeTradeAttribution(result.trades);
-  folds.push({
+  if(result.exposureControlEvents.length>0) throw new Error(`${def.label}_PARTIAL_TRIM_REPORTING_REQUIRES_POSITION_LEVEL_METRICS`);
+  const report={
     label:def.label,
     tradingStartTime:new Date(def.startMs).toISOString(),
     dataEnd:new Date(def.endMs).toISOString(),
@@ -111,17 +128,39 @@ for(const def of foldDefs){
     expectancy:result.metrics.expectancy,
     winRatePct:result.metrics.winRatePct,
     tradeCount:result.trades.length,
+    tradeCountSemantics:'COMPLETED_POSITION_EXITS',
+    openPositionAtFoldEnd:Boolean(result.openPosition),
     totalExecutionCosts:result.totalExecutionCosts,
     maxObservedExposurePct:result.maxObservedExposurePct,
     maxPostControlExposurePct:result.maxPostControlExposurePct,
+    researchFilterBlockedCount:result.researchFilterEvents.length,
+  };
+  if(!detailed) return report;
+  const annotated=annotateTradesWithStructuralPersistence({candles:foldCandles,trades:result.trades});
+  const attribution=summarizeTradeAttribution(result.trades);
+  return {
+    ...report,
     attribution,
     exitReasonAttribution:attribution.byExitReason,
     signalFunnel:summarizeSignalFunnel(result.signalFunnelEvents),
     risk:summarizeRiskDecisions(result.riskEvents),
     featureOutcomes:summarizeTradeFeatureOutcomes(annotated),
     structuralBuckets:summarizeStructuralBuckets(annotated),
-  });
+  };
 }
+
+const folds=foldDefs.map(def=>runFold(def)).filter(Boolean);
+const candidateFolds=foldDefs.map(def=>runFold(def,{thresholdPct:researchCandidate.thresholdPct})).filter(Boolean);
+const sensitivity=researchCandidate.sensitivityThresholdsPct.map(thresholdPct=>({
+  thresholdPct,
+  folds: thresholdPct===researchCandidate.thresholdPct
+    ? candidateFolds.map(({attribution,exitReasonAttribution,signalFunnel,risk,featureOutcomes,structuralBuckets,...compact})=>compact)
+    : foldDefs.map(def=>runFold(def,{thresholdPct,detailed:false})).filter(Boolean),
+}));
+
+if(folds.length<2) throw new Error(`BASELINE_FOLDS_INCOMPLETE:${folds.length}`);
+if(candidateFolds.length<2) throw new Error(`CANDIDATE_FOLDS_INCOMPLETE:${candidateFolds.length}`);
+for(const item of sensitivity) if(item.folds.length<2) throw new Error(`SENSITIVITY_FOLDS_INCOMPLETE:${item.thresholdPct}:${item.folds.length}`);
 
 const summary={
   engine:'ALGO_V2_BYBIT_SPOT_RESEARCH_V1_2',
@@ -165,6 +204,11 @@ const summary={
     firstEligibleResearchEntry:new Date(researchStart).toISOString(),
   },
   folds,
+  researchCandidate:{
+    ...researchCandidate,
+    folds:candidateFolds,
+    sensitivity,
+  },
 };
 const json=JSON.stringify(summary,null,2);
 if(out){
@@ -172,4 +216,3 @@ if(out){
   await fs.writeFile(out,json+'\n','utf8');
 }
 console.log(json);
-if(folds.length<2) process.exitCode=2;
