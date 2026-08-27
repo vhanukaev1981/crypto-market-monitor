@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { normalizeBybitBotVisibility } from "../../src/cryptobot/bybit-bot-normalizer.ts";
@@ -6,6 +7,10 @@ import { mapPortfolio } from "../../src/cryptobot/gateway/portfolio.ts";
 import { mapSystemHealth } from "../../src/cryptobot/gateway/system-health.ts";
 
 const NOW = Date.parse("2026-08-27T03:10:00.000Z");
+const API_WRAPPER_SOURCE = readFileSync(
+  new URL("../../supabase/functions/cryptobot-api/index.ts", import.meta.url),
+  "utf8",
+);
 
 test("Bybit bot allocations are reported as detected instead of unknown", () => {
   const result = normalizeBybitBotVisibility({
@@ -90,4 +95,22 @@ test("portfolio explicitly declares when visible asset rows cover Unified only",
   assert.equal(portfolio.assets_scope, "unified_only");
   assert.equal(portfolio.account_breakdown.length, 3);
   assert.equal(portfolio.assets.reduce((sum, asset) => sum + (asset.usd_value ?? 0), 0) < portfolio.total_equity_usd!, true);
+});
+
+test("Lovable compatibility does not fabricate a live runtime pipeline with unknown stages", () => {
+  assert.doesNotMatch(API_WRAPPER_SOURCE, /const pipeline = \[[\s\S]*status: "unknown"[\s\S]*\];/);
+  assert.doesNotMatch(API_WRAPPER_SOURCE, /\bpipeline,\s*\n\s*latest_decision:/);
+});
+
+test("Lovable compatibility exposes safely stopped legacy services as inactive", () => {
+  assert.match(API_WRAPPER_SOURCE, /legacy_algobot[\s\S]{0,700}inactive/);
+  assert.match(API_WRAPPER_SOURCE, /private_stream[\s\S]{0,700}inactive/);
+  assert.match(API_WRAPPER_SOURCE, /orderbook_stream[\s\S]{0,700}inactive/);
+});
+
+test("Lovable compatibility preserves the ALGO V2 research freshness window", () => {
+  assert.match(API_WRAPPER_SOURCE, /researchSourceCompat/);
+  assert.match(API_WRAPPER_SOURCE, /21_600/);
+  assert.match(API_WRAPPER_SOURCE, /86_400/);
+  assert.match(API_WRAPPER_SOURCE, /freshness_state/);
 });
