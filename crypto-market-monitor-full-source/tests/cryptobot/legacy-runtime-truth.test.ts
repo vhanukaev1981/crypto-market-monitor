@@ -111,3 +111,34 @@ test("overview suppresses inactive legacy PnL and decision while preserving curr
   assert.deepEqual(overview.alerts, []);
   assert.equal(overview.system_state, "protection");
 });
+
+test("current ALGO V2 research metadata replaces legacy strategy statistics in current status", () => {
+  const result = mapAlgoBotStatus(
+    [{ strategy_key: "legacy_strategy", trades: 124, wins: 60, net_pnl: -4.71, updated_at: OLD }],
+    [{ id: 42, strategy_key: "legacy_strategy", symbol: "BTCUSDT", signal: "hold", eligible: false, created_at: OLD }],
+    stoppedRuntime,
+    false,
+    NOW,
+    {
+      id: "algo-v2-core-v1",
+      name: "ALGO V2 Core V1",
+      status: "draft",
+      updated_at: "2026-08-27T03:24:00.000Z",
+      head_sha: "53e27853375fcedd6f88020b8f22352e42b1b844",
+      live_trading: false,
+      leverage: false,
+    },
+  );
+
+  assert.equal(result.strategies.length, 1);
+  assert.equal(result.strategies[0]?.id, "algo-v2-core-v1");
+  assert.equal(result.strategies[0]?.name, "ALGO V2 Core V1");
+  assert.equal(result.strategies[0]?.mode, "research");
+  assert.match(result.strategies[0]?.status ?? "", /draft/i);
+  assert.equal(result.strategies[0]?.trade_count, null);
+  assert.equal(result.strategies[0]?.pnl_usd, null);
+  assert.deepEqual(result.latest_signals, []);
+  assert.deepEqual(result.latest_decisions, []);
+  assert.equal(result.source.freshness_state, "fresh");
+  assert.equal(result.source.source_state, "ok");
+});
