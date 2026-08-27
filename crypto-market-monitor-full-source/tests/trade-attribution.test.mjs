@@ -12,7 +12,7 @@ const trades=[
   {entryTime:'2021-02-01T00:00:00.000Z',pnl:-25,entryRegime:'TREND_UP',entryRegimeConfidence:75,entryScore:75,entryAtrPct:4,entryAdx14:25,entryRsi14:50,exitReason:'TREND_INVALIDATION'},
 ];
 
-test('summarizes realized trades by year regime and year-regime with auditable metrics', () => {
+test('summarizes realized trades by year regime exit reason and year-regime with auditable metrics', () => {
   const r=summarizeTradeAttribution(trades);
   assert.equal(r.total.tradeCount,3);
   assert.equal(r.total.totalPnl,25);
@@ -31,9 +31,14 @@ test('summarizes realized trades by year regime and year-regime with auditable m
   assert.equal(r.byYear['2021'].totalPnl,-25);
   assert.equal(r.byRegime.TREND_UP.tradeCount,3);
   assert.equal(r.byYearRegime['2020|TREND_UP'].tradeCount,2);
+  assert.equal(r.byExitReason.TRAILING_STOP.tradeCount,1);
+  assert.equal(r.byExitReason.TRAILING_STOP.totalPnl,100);
+  assert.equal(r.byExitReason.TREND_INVALIDATION.tradeCount,2);
+  assert.equal(r.byExitReason.TREND_INVALIDATION.totalPnl,-75);
 });
 
-test('rejects trade rows without finite pnl or entry attribution fields', () => {
-  assert.throws(()=>summarizeTradeAttribution([{entryTime:'2020-01-01T00:00:00Z',pnl:NaN,entryRegime:'TREND_UP'}]),/INVALID_ATTRIBUTION_TRADE/);
-  assert.throws(()=>summarizeTradeAttribution([{entryTime:'2020-01-01T00:00:00Z',pnl:1}]),/INVALID_ATTRIBUTION_TRADE/);
+test('rejects trade rows without finite pnl entry attribution or exit reason fields', () => {
+  assert.throws(()=>summarizeTradeAttribution([{entryTime:'2020-01-01T00:00:00Z',pnl:NaN,entryRegime:'TREND_UP',exitReason:'TRAILING_STOP'}]),/INVALID_ATTRIBUTION_TRADE/);
+  assert.throws(()=>summarizeTradeAttribution([{entryTime:'2020-01-01T00:00:00Z',pnl:1,exitReason:'TRAILING_STOP'}]),/INVALID_ATTRIBUTION_TRADE/);
+  assert.throws(()=>summarizeTradeAttribution([{entryTime:'2020-01-01T00:00:00Z',pnl:1,entryRegime:'TREND_UP'}]),/INVALID_ATTRIBUTION_TRADE/);
 });
