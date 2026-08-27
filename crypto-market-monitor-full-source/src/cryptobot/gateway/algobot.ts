@@ -4,13 +4,57 @@ import type { Row } from "../repository.ts";
 import { decisionSummary } from "./decision.ts";
 import { iso, latestTimestamp, num, row, sourceMeta, strategyMode, text } from "./shared.ts";
 
+type CurrentResearch = {
+  id: string;
+  name: string;
+  status: string;
+  updated_at: string | null;
+  head_sha?: string | null;
+  live_trading: boolean;
+  leverage: boolean;
+};
+
 export function mapAlgoBotStatus(
   performance: Row[],
   decisions: Row[],
   botStatuses: Row[],
   sourceError: boolean,
   nowMs = Date.now(),
+  currentResearch?: CurrentResearch | null,
 ): AlgoBotStatus {
+  if (currentResearch) {
+    const observedAt = iso(currentResearch.updated_at);
+    const statusParts = [currentResearch.status || "unknown"];
+    if (!currentResearch.live_trading) statusParts.push("no live");
+    if (!currentResearch.leverage) statusParts.push("no leverage");
+
+    return AlgoBotStatusSchema.parse({
+      strategies: [{
+        id: currentResearch.id,
+        key: currentResearch.id,
+        name: currentResearch.name,
+        mode: "research",
+        status: statusParts.join(" · "),
+        win_rate_pct: null,
+        expectancy_usd: null,
+        pnl_usd: null,
+        drawdown_pct: null,
+        trade_count: null,
+        latest_signal: null,
+        latest_decision_id: null,
+        observed_at: observedAt,
+      }],
+      latest_signals: [],
+      latest_decisions: [],
+      source: sourceMeta(
+        observedAt,
+        FRESHNESS_POLICIES.algobot,
+        sourceError ? "fault" : "ok",
+        nowMs,
+      ),
+    });
+  }
+
   const botStrategy = row(botStatuses[0]?.strategy);
   const configuredMode = strategyMode(botStrategy.mode ?? botStatuses[0]?.environment);
   const latestByStrategy = new Map<string, Row>();
