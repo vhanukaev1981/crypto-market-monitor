@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { freshnessHebrew } from "../../mcp/web/src/format.ts";
 import { normalizeBybitBotVisibility } from "../../src/cryptobot/bybit-bot-normalizer.ts";
 import { mapPortfolio } from "../../src/cryptobot/gateway/portfolio.ts";
 import { mapSystemHealth } from "../../src/cryptobot/gateway/system-health.ts";
@@ -113,4 +114,9 @@ test("Lovable compatibility preserves the ALGO V2 research freshness window", ()
   assert.match(API_WRAPPER_SOURCE, /21_600/);
   assert.match(API_WRAPPER_SOURCE, /86_400/);
   assert.match(API_WRAPPER_SOURCE, /freshness_state/);
+});
+
+test("ChatGPT widget labels both canonical aging and compatibility delayed research data as updating", () => {
+  assert.equal(freshnessHebrew("aging"), "מתעדכן");
+  assert.equal(freshnessHebrew("delayed"), "מתעדכן");
 });
