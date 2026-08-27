@@ -5,7 +5,7 @@ import { createGunzip } from 'node:zlib';
 import { tradesStreamToHourlyCandles } from '../algo/bybit-trade-stream-import.mjs';
 import { monthKeys, mergeHourlyCandleChunks, spotArchiveUrl } from '../algo/bybit-spot-archive.mjs';
 import { validateStrictHourlyCandles } from '../algo/hourly-data-quality.mjs';
-import { spotResearchTimeRange } from '../algo/spot-research-window.mjs';
+import { spotResearchTimeRange, spotArchiveCoverageTimeRange } from '../algo/spot-research-window.mjs';
 import { runTrendPullbackBacktest } from '../algo/trend-pullback-backtest.mjs';
 import { annotateTradesWithStructuralPersistence } from '../algo/structural-trade-annotation.mjs';
 import { summarizeTradeAttribution } from '../algo/trade-attribution.mjs';
@@ -27,7 +27,8 @@ const maxCompressedGb=Number(arg('max-compressed-gb','20'));
 if(!/^[A-Z0-9]{3,20}$/.test(symbol)) throw new Error('INVALID_SYMBOL');
 if(!Number.isFinite(maxCompressedGb)||maxCompressedGb<=0) throw new Error('INVALID_DOWNLOAD_CAP');
 
-const range=spotResearchTimeRange({startMonth,endMonth});
+const requestedRange=spotResearchTimeRange({startMonth,endMonth});
+const archiveRange=spotArchiveCoverageTimeRange({startMonth,endMonth});
 const maxCompressedBytes=maxCompressedGb*1024**3;
 
 const parameters={
@@ -73,11 +74,11 @@ for(const item of manifest){
 
 const merged=mergeHourlyCandleChunks(chunks);
 const validated=validateStrictHourlyCandles(merged,{
-  expectedStartTime:range.expectedFirst,
-  expectedEndTime:range.expectedLast,
+  expectedStartTime:archiveRange.expectedFirst,
+  expectedEndTime:archiveRange.expectedLast,
 });
-if(validated.metadata.candleCount!==range.expectedCandleCount) {
-  throw new Error(`UNEXPECTED_HOURLY_CANDLE_COUNT:${validated.metadata.candleCount}:${range.expectedCandleCount}`);
+if(validated.metadata.candleCount!==archiveRange.expectedCandleCount) {
+  throw new Error(`UNEXPECTED_HOURLY_CANDLE_COUNT:${validated.metadata.candleCount}:${archiveRange.expectedCandleCount}`);
 }
 const candles=validated.candles;
 if(candles.length<4800) throw new Error(`SPOT_INSUFFICIENT_HISTORY:${candles.length}`);
@@ -144,13 +145,24 @@ const summary={
     syntheticRepair:false,
     conflictingDuplicatePolicy:'FAIL_CLOSED',
     implicitSymbolPolicy:'PINNED_CANONICAL_ARCHIVE_URL_ONLY',
+    preArchiveGapPolicy:'DOCUMENT_AND_EXCLUDE_FROM_WARMUP',
     manifest,
   },
   data:{
     ...validated.metadata,
-    expectedCandleCount:range.expectedCandleCount,
-    expectedFirst:range.expectedFirst,
-    expectedLast:range.expectedLast,
+    requestedWindow:{
+      expectedFirst:requestedRange.expectedFirst,
+      expectedLast:requestedRange.expectedLast,
+      expectedCandleCount:requestedRange.expectedCandleCount,
+    },
+    archiveCoverage:{
+      expectedFirst:archiveRange.expectedFirst,
+      expectedLast:archiveRange.expectedLast,
+      expectedCandleCount:archiveRange.expectedCandleCount,
+      preArchiveMissingHours:archiveRange.preArchiveMissingHours,
+    },
+    warmupHoursRequired:4800,
+    firstEligibleResearchEntry:new Date(researchStart).toISOString(),
   },
   folds,
 };
