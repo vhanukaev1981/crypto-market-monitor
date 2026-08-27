@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertSpotResearchWindow, spotResearchTimeRange } from '../algo/spot-research-window.mjs';
+import { assertSpotResearchWindow, spotResearchTimeRange, spotArchiveCoverageTimeRange } from '../algo/spot-research-window.mjs';
 
 test('allows canonical Spot development window through 2024-12',()=>{
   assert.deepEqual(assertSpotResearchWindow({startMonth:'2022-11',endMonth:'2024-12'}),{startMonth:'2022-11',endMonth:'2024-12',oosLocked:true});
@@ -9,6 +9,7 @@ test('allows canonical Spot development window through 2024-12',()=>{
 test('rejects any research request that touches blind 2025+ OOS',()=>{
   assert.throws(()=>assertSpotResearchWindow({startMonth:'2022-11',endMonth:'2025-01'}),/OOS_WINDOW_LOCKED/);
   assert.throws(()=>spotResearchTimeRange({startMonth:'2022-11',endMonth:'2025-01'}),/OOS_WINDOW_LOCKED/);
+  assert.throws(()=>spotArchiveCoverageTimeRange({startMonth:'2022-11',endMonth:'2025-01'}),/OOS_WINDOW_LOCKED/);
 });
 
 test('rejects pre-archive or inverted ranges',()=>{
@@ -23,5 +24,18 @@ test('derives exact canonical hourly UTC boundaries and expected candle count',(
     expectedFirst:'2022-11-01T00:00:00.000Z',
     expectedLast:'2024-12-31T23:00:00.000Z',
     expectedCandleCount:19008,
+  });
+});
+
+test('separates canonical requested window from observed public Spot archive coverage',()=>{
+  assert.deepEqual(spotArchiveCoverageTimeRange({startMonth:'2022-11',endMonth:'2024-12'}),{
+    startMs:Date.parse('2022-11-10T00:00:00.000Z'),
+    endRequestMs:Date.parse('2024-12-31T23:59:59.999Z'),
+    expectedFirst:'2022-11-10T00:00:00.000Z',
+    expectedLast:'2024-12-31T23:00:00.000Z',
+    expectedCandleCount:18792,
+    requestedExpectedFirst:'2022-11-01T00:00:00.000Z',
+    requestedExpectedCandleCount:19008,
+    preArchiveMissingHours:216,
   });
 });
