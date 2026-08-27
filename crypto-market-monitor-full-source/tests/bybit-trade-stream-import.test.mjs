@@ -19,6 +19,32 @@ test('aggregates chronological Bybit trade CSV stream into deterministic 1H OHLC
   assert.deepEqual(out[1],{time:'2025-01-01T01:00:00.000Z',open:110,high:110,low:110,close:110,volume:0.4});
 });
 
+test('rejects canonical archive schema without explicit opt-in to implicit symbol provenance', async()=>{
+  const csv='id,timestamp,price,volume,side\n1,1668038400525,15910.61,0.003383,sell\n';
+  await assert.rejects(
+    ()=>tradesStreamToHourlyCandles(Readable.from([csv]),{symbol:'BTCUSDT'}),
+    /IMPLICIT_SYMBOL_NOT_ALLOWED/,
+  );
+});
+
+test('accepts observed canonical Spot archive schema only with explicit implicit-symbol provenance opt-in', async()=>{
+  const csv=[
+    'id,timestamp,price,volume,side',
+    '1,1668038400525,15910.61,0.003383,sell',
+    '2,1668038460000,15920.00,0.010000,buy',
+  ].join('\n');
+  const out=await tradesStreamToHourlyCandles(Readable.from([csv]),{symbol:'BTCUSDT',allowImplicitSymbol:true});
+  assert.equal(out.length,1);
+  assert.deepEqual(out[0],{
+    time:'2022-11-10T00:00:00.000Z',
+    open:15910.61,
+    high:15920,
+    low:15910.61,
+    close:15920,
+    volume:0.013383,
+  });
+});
+
 test('rejects out-of-order trades instead of silently rewriting OHLC chronology', async()=>{
   const csv='timestamp,symbol,side,size,price\n1735689660,BTCUSDT,Buy,1,101\n1735689600,BTCUSDT,Buy,1,100\n';
   await assert.rejects(()=>tradesStreamToHourlyCandles(Readable.from([csv]),{symbol:'BTCUSDT'}),/NON_MONOTONIC_TRADE_TIME/);
