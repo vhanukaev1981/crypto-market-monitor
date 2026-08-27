@@ -34,6 +34,36 @@ const sourceCompat = (source: unknown) => {
   const s = obj(source);
   return { ...s, updated_at: s.observed_at ?? null, timestamp: s.observed_at ?? null, last_update: s.observed_at ?? null };
 };
+
+// ALGO V2 is a research/code source, not a runtime heartbeat. Preserve its
+// canonical 6h fresh / 24h stale policy so the Lovable client does not apply
+// its generic 30-minute fallback to research metadata.
+const researchSourceCompat = (source: unknown) => {
+  const s = obj(source);
+  const rawAge = typeof s.age_seconds === "number" && Number.isFinite(s.age_seconds)
+    ? Math.max(0, s.age_seconds)
+    : null;
+  const ageSeconds = rawAge ?? (() => {
+    const at = observed(s);
+    if (!at) return null;
+    const ms = new Date(at).getTime();
+    return Number.isFinite(ms) ? Math.max(0, Math.floor((Date.now() - ms) / 1000)) : null;
+  })();
+
+  let freshnessState = typeof s.freshness_state === "string" ? s.freshness_state : null;
+  if (ageSeconds !== null) {
+    freshnessState = ageSeconds <= 21_600 ? "fresh" : ageSeconds <= 86_400 ? "delayed" : "stale";
+  } else if (freshnessState === "aging") {
+    freshnessState = "delayed";
+  }
+
+  return {
+    ...sourceCompat(s),
+    age_seconds: ageSeconds,
+    freshness_state: freshnessState,
+  };
+};
+
 const sumKnown = (rows: AnyObj[], key: string): number | null => {
   const nums = rows.map((r) => r[key]).filter((v) => typeof v === "number" && Number.isFinite(v));
   return nums.length ? nums.reduce((a, b) => a + b, 0) : null;
@@ -85,7 +115,12 @@ function compat(tool: StandalonePreviewTool, raw: unknown): unknown {
 
   if (tool === "get_dashboard_overview") {
     const p = obj(r.pnl);
-    const sources = Object.fromEntries(Object.entries(obj(r.sources)).map(([k, v]) => [k, sourceCompat(v)]));
+    const sources = Object.fromEntries(
+      Object.entries(obj(r.sources)).map(([k, v]) => [
+        k,
+        k === "algobot" || k === "risk" ? researchSourceCompat(v) : sourceCompat(v),
+      ]),
+    );
     return {
       ...r,
       equity: r.portfolio_equity_usd ?? null,
@@ -121,13 +156,10 @@ function compat(tool: StandalonePreviewTool, raw: unknown): unknown {
       created_at: last.observed_at ?? null,
       observed_at: last.observed_at ?? null,
     } : null;
-    const pipeline = [
-      { name: "Market Data", status: "unknown", detail: "קליטת נתוני שוק" },
-      { name: "Strategy", status: "unknown", detail: "חישוב אסטרטגיה ואיתותים" },
-      { name: "Risk Engine", status: "unknown", detail: "אכיפת מגבלות סיכון" },
-      { name: "Order Manager", status: "unknown", detail: "ניהול תכנית הוראה" },
-      { name: "Execution", status: "unknown", detail: "שער מצב ביצוע" },
-    ];
+
+    // Do not fabricate runtime stage health. ALGO V2 currently exposes
+    // research/development metadata; the UI will render architecture-only
+    // fallback stages when no verified runtime pipeline is returned.
     return {
       ...r,
       status,
@@ -140,10 +172,9 @@ function compat(tool: StandalonePreviewTool, raw: unknown): unknown {
       pnl,
       total_pnl: pnl,
       updated_at: observed(r.source),
-      pipeline,
       latest_decision: latestDecision,
       latest_decision_id: latestDecision?.id ?? null,
-      source: sourceCompat(r.source),
+      source: researchSourceCompat(r.source),
     };
   }
 
@@ -202,7 +233,7 @@ function compat(tool: StandalonePreviewTool, raw: unknown): unknown {
       violations: r.recent_events ?? [],
       alerts: r.recent_events ?? [],
       updated_at: observed(r.source),
-      source: sourceCompat(r.source),
+      source: researchSourceCompat(r.source),
     };
   }
 
@@ -221,9 +252,37 @@ function compat(tool: StandalonePreviewTool, raw: unknown): unknown {
         c.name = "Bybit Mainnet API — Read-Only";
         c.service = "Bybit Mainnet API — Read-Only";
       }
+
+      if (c.key === "algo_v2") {
+        c.meta = researchSourceCompat(c.meta);
+      }
+
+      if (c.key === "legacy_algobot" && /stopped safely|kill switch|protection/i.test(String(c.message ?? ""))) {
+        c.state = "inactive";
+        c.status = "inactive";
+        c.health = "inactive";
+        c.meta = { ...obj(c.meta), observed_at: null, age_seconds: null, freshness_state: "inactive", source_state: "inactive" };
+      }
+
+      if (c.key === "private_stream" && /inactive/i.test(String(c.message ?? ""))) {
+        c.state = "inactive";
+        c.status = "inactive";
+        c.health = "inactive";
+        c.meta = { ...obj(c.meta), observed_at: null, age_seconds: null, freshness_state: "inactive", source_state: "inactive" };
+      }
+
+      if (c.key === "orderbook_stream" && /inactive/i.test(String(c.message ?? ""))) {
+        c.state = "inactive";
+        c.status = "inactive";
+        c.health = "inactive";
+        c.meta = { ...obj(c.meta), observed_at: null, age_seconds: null, freshness_state: "inactive", source_state: "inactive" };
+      }
     }
 
-    const dataSources = Object.fromEntries(components.map((c) => [String(c.key ?? c.name ?? "source"), sourceCompat(c.meta)]));
+    const dataSources = Object.fromEntries(components.map((c) => [
+      String(c.key ?? c.name ?? "source"),
+      c.key === "algo_v2" ? researchSourceCompat(c.meta) : sourceCompat(c.meta),
+    ]));
     return {
       ...r,
       status: r.overall_state ?? null,
@@ -271,7 +330,7 @@ Deno.serve(async (request) => {
     return new Response(JSON.stringify({
       ok: true,
       service: "cryptobot-api",
-      version: 5,
+      version: 6,
       mode: "private_read_only",
       allowed_tools: 8,
       cors_origins: ALLOWED_ORIGINS.size,
