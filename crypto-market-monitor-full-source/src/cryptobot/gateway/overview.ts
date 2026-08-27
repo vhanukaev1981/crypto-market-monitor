@@ -20,22 +20,25 @@ export function mapDashboardOverview(
     : null;
 
   const activeStrategies = algobot.strategies.filter((strategy) => strategy.status === "active").length;
+  const runtimeActive = activeStrategies > 0;
   const modeSummary = algobot.strategies.reduce<Record<string, number>>((acc, strategy) => {
     acc[strategy.mode] = (acc[strategy.mode] ?? 0) + 1;
     return acc;
   }, {});
-  const algoPnlValues = algobot.strategies.map((strategy) => strategy.pnl_usd).filter((value): value is number => value !== null);
+  const algoPnlValues = runtimeActive
+    ? algobot.strategies.map((strategy) => strategy.pnl_usd).filter((value): value is number => value !== null)
+    : [];
   const algoPnl = algoPnlValues.length ? algoPnlValues.reduce((sum, value) => sum + value, 0) : null;
 
   return DashboardOverviewSchema.parse({
     portfolio_equity_usd: portfolioEquity,
     pnl: {
-      day_usd: num(dashboard?.realized_today),
+      day_usd: runtimeActive ? num(dashboard?.realized_today) : null,
       week_usd: null,
       month_usd: null,
     },
     drawdown_pct: risk.drawdown_pct,
-    deployed_capital_pct: deployedCapitalPct,
+    deployed_capital_pct: runtimeActive ? deployedCapitalPct : null,
     open_positions: num(dashboard?.open_positions) === null ? null : Math.max(0, Math.trunc(num(dashboard?.open_positions)!)),
     algobot: {
       active_strategies: algobot.strategies.length ? activeStrategies : null,
@@ -43,7 +46,7 @@ export function mapDashboardOverview(
       mode_summary: modeSummary,
     },
     bybit_bots: {
-      count: bybitBots.details_available ? bybitBots.bots.length : null,
+      count: bybitBots.bots.length || null,
       equity_usd: bybitBots.total_bot_account_equity_usd,
       pnl_usd: bybitBots.details_available
         ? (() => {
@@ -52,7 +55,7 @@ export function mapDashboardOverview(
           })()
         : null,
     },
-    latest_decision: algobot.latest_decisions[0] ?? null,
+    latest_decision: runtimeActive ? algobot.latest_decisions[0] ?? null : null,
     alerts: risk.recent_events.slice(0, 10),
     system_state: system.overall_state,
     sources: {
