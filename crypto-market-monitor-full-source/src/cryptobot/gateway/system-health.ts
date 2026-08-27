@@ -27,40 +27,62 @@ export function mapSystemHealth(
   const engineObserved = latestTimestamp(botStatuses.map((item) => item.last_run_at ?? item.updated_at));
   const engineDisabled = botStatuses.length > 0 && botStatuses.every((item) => item.enabled !== true);
   const killSwitch = botStatuses.some((item) => item.kill_switch === true);
+  const legacyRuntimeStopped = killSwitch || engineDisabled;
   const engineMeta = sourceMeta(
     engineObserved,
     FRESHNESS_POLICIES.algobot,
-    sourceErrors.engine ? "fault" : killSwitch || engineDisabled ? "attention" : botStatuses.length ? "ok" : "unknown",
+    sourceErrors.engine ? "fault" : legacyRuntimeStopped ? "attention" : botStatuses.length ? "ok" : "unknown",
     nowMs,
   );
 
+  const streamObserved = streamState?.last_message_at ?? streamState?.updated_at;
+  const orderbookObserved = orderbookState?.last_sample_at ?? orderbookState?.updated_at;
   const streamMeta = sourceMeta(
-    streamState?.last_message_at ?? streamState?.updated_at,
+    streamObserved,
     FRESHNESS_POLICIES.reconciliation,
-    sourceErrors.stream ? "fault" : sourceState(bool(streamState?.connected), Boolean(streamState?.last_error)),
+    sourceErrors.stream ? "fault" : legacyRuntimeStopped ? "unknown" : sourceState(bool(streamState?.connected), Boolean(streamState?.last_error)),
     nowMs,
   );
   const orderbookMeta = sourceMeta(
-    orderbookState?.last_sample_at ?? orderbookState?.updated_at,
+    orderbookObserved,
     FRESHNESS_POLICIES.reconciliation,
-    sourceErrors.orderbook ? "fault" : sourceState(bool(orderbookState?.connected), Boolean(orderbookState?.last_error)),
+    sourceErrors.orderbook ? "fault" : legacyRuntimeStopped ? "unknown" : sourceState(bool(orderbookState?.connected), Boolean(orderbookState?.last_error)),
     nowMs,
   );
 
   let overallState: SystemState = "healthy";
   if (exchangeFlagsUnsafe) overallState = "emergency_stop";
-  else if (killSwitch) overallState = "protection";
+  else if (legacyRuntimeStopped) overallState = "protection";
   else if ([exchangeMeta, engineMeta, streamMeta, orderbookMeta].some((meta) => meta.source_state === "fault" || meta.freshness_state === "stale")) overallState = "limited";
   else if ([exchangeMeta, engineMeta, streamMeta, orderbookMeta].some((meta) => meta.source_state === "attention" || meta.freshness_state === "aging" || meta.freshness_state === "unavailable")) overallState = "limited";
 
   const observedAt = latestTimestamp([exchangeObserved, engineObserved, streamState?.updated_at, orderbookState?.updated_at]);
+  const inactiveMessage = "Inactive while legacy runtime is stopped safely";
   return SystemHealthSchema.parse({
     overall_state: overallState,
     components: [
       { key: "bybit", label: "Bybit", state: exchangeMeta.source_state, message: text(connection?.last_error), meta: exchangeMeta },
-      { key: "algobot", label: "AlgoBot", state: engineMeta.source_state, message: killSwitch ? "מפסק ההגנה פעיל" : engineDisabled ? "מנוע המסחר אינו פעיל" : null, meta: engineMeta },
-      { key: "private_stream", label: "זרם נתונים פרטי", state: streamMeta.source_state, message: text(streamState?.last_error), meta: streamMeta },
-      { key: "orderbook", label: "ספר פקודות", state: orderbookMeta.source_state, message: text(orderbookState?.last_error), meta: orderbookMeta },
+      {
+        key: "algobot",
+        label: "Legacy AlgoBot Runtime",
+        state: engineMeta.source_state,
+        message: legacyRuntimeStopped ? "Legacy runtime stopped safely; protection gate is active" : null,
+        meta: engineMeta,
+      },
+      {
+        key: "private_stream",
+        label: "זרם נתונים פרטי",
+        state: streamMeta.source_state,
+        message: legacyRuntimeStopped ? inactiveMessage : text(streamState?.last_error),
+        meta: streamMeta,
+      },
+      {
+        key: "orderbook",
+        label: "ספר פקודות",
+        state: orderbookMeta.source_state,
+        message: legacyRuntimeStopped ? inactiveMessage : text(orderbookState?.last_error),
+        meta: orderbookMeta,
+      },
     ],
     authorization_mode: "read_only",
     exchange_trading_enabled: connection?.trading_enabled === true,
