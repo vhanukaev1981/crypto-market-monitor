@@ -23,6 +23,9 @@ export function mapPortfolio(
     usd_value: num(item.usd_value),
     account_type: text(item.asset_class),
   }));
+  const assetsScope = mappedAssets.length > 0 && mappedAssets.every((item) => String(item.account_type ?? "").toLowerCase() === "unified")
+    ? "unified_only"
+    : "unknown";
 
   const mappedPositions = positions.map((item) => ({
     id: String(item.position_id ?? `${item.symbol ?? "position"}:${item.opened_at ?? "unknown"}`),
@@ -58,6 +61,7 @@ export function mapPortfolio(
   return PortfolioOutputSchema.parse({
     total_equity_usd: num(account.total_assets_usd ?? account.total_equity),
     account_breakdown: breakdown,
+    assets_scope: assetsScope,
     assets: mappedAssets,
     positions: mappedPositions,
     recent_trades: recentTrades,
