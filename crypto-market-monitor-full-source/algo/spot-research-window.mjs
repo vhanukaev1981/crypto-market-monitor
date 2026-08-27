@@ -31,3 +31,19 @@ export function spotResearchTimeRange({startMonth,endMonth}={}){
     expectedCandleCount:(expectedLastMs-startMs)/3600000+1,
   };
 }
+
+export function spotArchiveCoverageTimeRange({startMonth,endMonth}={}){
+  const requested=spotResearchTimeRange({startMonth,endMonth});
+  const archiveStartMs=startMonth==='2022-11' ? Date.UTC(2022,10,10,0,0,0,0) : requested.startMs;
+  const expectedLastMs=Date.parse(requested.expectedLast);
+  return {
+    startMs:archiveStartMs,
+    endRequestMs:requested.endRequestMs,
+    expectedFirst:new Date(archiveStartMs).toISOString(),
+    expectedLast:requested.expectedLast,
+    expectedCandleCount:(expectedLastMs-archiveStartMs)/3600000+1,
+    requestedExpectedFirst:requested.expectedFirst,
+    requestedExpectedCandleCount:requested.expectedCandleCount,
+    preArchiveMissingHours:(archiveStartMs-requested.startMs)/3600000,
+  };
+}
