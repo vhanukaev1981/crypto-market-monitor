@@ -10,6 +10,11 @@ function parseHeader(line){
   return line.split(',').map(x=>x.trim().toLowerCase());
 }
 
+function looksLikeHeader(line,indexes){
+  if(indexes===null) return true;
+  return /timestamp/i.test(line) && /price/i.test(line) && /(?:size|volume)/i.test(line);
+}
+
 export async function tradesStreamToHourlyCandles(readable,{symbol,allowImplicitSymbol=false}={}){
   if(!readable || typeof readable[Symbol.asyncIterator]!=='function') throw new Error('INVALID_STREAM');
   if(!/^[A-Z0-9]{3,20}$/.test(symbol??'')) throw new Error('INVALID_SYMBOL');
@@ -31,16 +36,19 @@ export async function tradesStreamToHourlyCandles(readable,{symbol,allowImplicit
   for await (const rawLine of rl){
     const line=rawLine.trim();
     if(!line) continue;
-    const maybeHeader=parseHeader(line);
-    if(maybeHeader.includes('timestamp') && maybeHeader.includes('price') && (maybeHeader.includes('size')||maybeHeader.includes('volume'))){
-      const ts=maybeHeader.indexOf('timestamp');
-      const sym=maybeHeader.indexOf('symbol');
-      const price=maybeHeader.indexOf('price');
-      const size=maybeHeader.includes('size')?maybeHeader.indexOf('size'):maybeHeader.indexOf('volume');
-      if(ts<0||price<0||size<0) throw new Error('UNSUPPORTED_BYBIT_TRADE_CSV');
-      if(sym<0&&!allowImplicitSymbol) throw new Error('IMPLICIT_SYMBOL_NOT_ALLOWED');
-      indexes={ts,sym,price,size};
-      continue;
+    if(looksLikeHeader(line,indexes)){
+      const maybeHeader=parseHeader(line);
+      if(maybeHeader.includes('timestamp') && maybeHeader.includes('price') && (maybeHeader.includes('size')||maybeHeader.includes('volume'))){
+        const ts=maybeHeader.indexOf('timestamp');
+        const sym=maybeHeader.indexOf('symbol');
+        const price=maybeHeader.indexOf('price');
+        const size=maybeHeader.includes('size')?maybeHeader.indexOf('size'):maybeHeader.indexOf('volume');
+        if(ts<0||price<0||size<0) throw new Error('UNSUPPORTED_BYBIT_TRADE_CSV');
+        if(sym<0&&!allowImplicitSymbol) throw new Error('IMPLICIT_SYMBOL_NOT_ALLOWED');
+        indexes={ts,sym,price,size};
+        continue;
+      }
+      if(indexes===null) throw new Error('MISSING_HEADER');
     }
     if(!indexes) throw new Error('MISSING_HEADER');
     const cols=line.split(',').map(x=>x.trim());
