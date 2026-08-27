@@ -8,6 +8,7 @@ on:
       - '.github/workflows/algo-v2-bybit-spot-research.yml'
       - 'crypto-market-monitor-full-source/algo/bybit-trade-stream-import.mjs'
       - 'crypto-market-monitor-full-source/algo/bybit-spot-archive.mjs'
+      - 'crypto-market-monitor-full-source/algo/hourly-data-quality.mjs'
       - 'crypto-market-monitor-full-source/algo/spot-research-window.mjs'
       - 'crypto-market-monitor-full-source/algo/trend-pullback-backtest.mjs'
       - 'crypto-market-monitor-full-source/algo/structural-trade-annotation.mjs'
@@ -41,6 +42,14 @@ jobs:
           mapfile -t files < <(find tests -maxdepth 1 -name '*.test.mjs' ! -name 'rendered-html.test.mjs' -print | sort)
           printf 'Running %s isolated test files\n' "${#files[@]}"
           node --test "${files[@]}"
+
+      - name: Probe canonical Spot archive schema
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          set +o pipefail
+          curl -fsSL 'https://public.bybit.com/spot/BTCUSDT/BTCUSDT-2022-11.csv.gz' | gzip -dc | head -n 2
+          true
 
       - name: Run canonical BTCUSDT Spot research with OOS lock
         working-directory: crypto-market-monitor-full-source
