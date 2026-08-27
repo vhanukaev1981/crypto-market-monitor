@@ -65,7 +65,7 @@ for(const item of manifest){
   const nodeBody=Readable.fromWeb(res.body);
   const gunzip=createGunzip();
   nodeBody.pipe(gunzip);
-  const hourly=await tradesStreamToHourlyCandles(gunzip,{symbol});
+  const hourly=await tradesStreamToHourlyCandles(gunzip,{symbol,allowImplicitSymbol:true});
   if(hourly.length<24*20) throw new Error(`SPOT_ARCHIVE_MONTH_TOO_SPARSE:${item.month}:${hourly.length}`);
   chunks.push(hourly);
   console.error(`${item.month}: ${hourly.length} hourly candles`);
@@ -143,6 +143,7 @@ const summary={
     knownCompressedBytes,
     syntheticRepair:false,
     conflictingDuplicatePolicy:'FAIL_CLOSED',
+    implicitSymbolPolicy:'PINNED_CANONICAL_ARCHIVE_URL_ONLY',
     manifest,
   },
   data:{
