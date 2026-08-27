@@ -18,6 +18,12 @@ export function monthKeys(start,end){
   return out;
 }
 
+export function spotArchiveUrl({symbol,month}={}){
+  if(!/^[A-Z0-9]{3,20}$/.test(symbol??'')) throw new Error('INVALID_SYMBOL');
+  parseMonthKey(month);
+  return `https://public.bybit.com/spot/${symbol}/${symbol}-${month}.csv.gz`;
+}
+
 function validateCandle(c){
   const t=Date.parse(c?.time);
   const open=Number(c?.open), high=Number(c?.high), low=Number(c?.low), close=Number(c?.close), volume=Number(c?.volume);
