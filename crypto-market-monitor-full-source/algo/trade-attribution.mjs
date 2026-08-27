@@ -1,6 +1,6 @@
 function validateTrade(trade) {
   const time=Date.parse(trade?.entryTime);
-  if (!Number.isFinite(time) || !Number.isFinite(trade?.pnl) || typeof trade?.entryRegime!=='string' || trade.entryRegime.length===0) {
+  if (!Number.isFinite(time) || !Number.isFinite(trade?.pnl) || typeof trade?.entryRegime!=='string' || trade.entryRegime.length===0 || typeof trade?.exitReason!=='string' || trade.exitReason.length===0) {
     throw new Error('INVALID_ATTRIBUTION_TRADE');
   }
 }
@@ -55,5 +55,6 @@ export function summarizeTradeAttribution(trades) {
     byYear:grouped(trades,year),
     byRegime:grouped(trades,t=>t.entryRegime),
     byYearRegime:grouped(trades,t=>`${year(t)}|${t.entryRegime}`),
+    byExitReason:grouped(trades,t=>t.exitReason),
   };
 }
