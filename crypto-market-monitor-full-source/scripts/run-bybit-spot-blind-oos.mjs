@@ -117,7 +117,7 @@ const checks={
   maxDrawdownPct:metrics.maxDrawdownPct<=5,
   maxExposurePct:metrics.maxObservedExposurePct<=30.000001 && metrics.maxPostControlExposurePct<=30.000001,
   syntheticRepair:validated.metadata.syntheticCount===0,
-  dataQualityViolations:validated.metadata.gapCount===0,
+  dataQualityViolations:validated.metadata.gapCount===0 && validated.metadata.syntheticCount===0,
   tuningAfterFreeze:freezeRecord.freeze.tuningAfterFreeze===false,
 };
 const passed=Object.values(checks).every(Boolean);
@@ -170,10 +170,9 @@ const record={
     checks,
   },
 };
-assertFrozenBlindOosRecord(record);
-
 const json=`${JSON.stringify(record,null,2)}\n`;
 const digest=sha256Hex(json);
+assertFrozenBlindOosRecord(record,{digest});
 const digestLine=`${digest}  ${basename(out)}\n`;
 await fs.mkdir(dirname(out),{recursive:true});
 await fs.mkdir(dirname(digestOut),{recursive:true});
