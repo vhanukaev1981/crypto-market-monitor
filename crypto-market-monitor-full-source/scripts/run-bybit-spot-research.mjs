@@ -13,6 +13,7 @@ import { summarizeRiskDecisions } from '../algo/risk-decision-attribution.mjs';
 import { summarizeSignalFunnel } from '../algo/signal-funnel.mjs';
 import { summarizeTradeFeatureOutcomes } from '../algo/trade-feature-outcomes.mjs';
 import { summarizeStructuralBuckets } from '../algo/structural-bucket-attribution.mjs';
+import { FROZEN_ALGO_V2_PARAMETERS, FROZEN_ALGO_V2_RESEARCH_CANDIDATE } from '../algo/algo-v2-candidate-freeze.mjs';
 
 function arg(name,fallback=null){
   const i=process.argv.indexOf(`--${name}`);
@@ -31,31 +32,20 @@ const requestedRange=spotResearchTimeRange({startMonth,endMonth});
 const archiveRange=spotArchiveCoverageTimeRange({startMonth,endMonth});
 const maxCompressedBytes=maxCompressedGb*1024**3;
 
-const parameters={
-  startingEquity:100000,
-  riskPct:0.0035,
-  maxPositionPct:0.25,
-  hardExposurePct:0.30,
-  atrStopMult:1.5,
-  trailAtrMult:2.0,
-  spreadBps:2,
-  slippageBps:2,
-  feeBps:10,
-  maxSpreadBps:10,
-  maxSlippageBps:10,
-};
+const parameters={...FROZEN_ALGO_V2_PARAMETERS};
 
-// Frozen before candidate replay. 25% is the ex-ante structural bucket boundary;
-// 20% and 30% are sensitivity-only neighbors and must not be selected after results.
 const researchCandidate={
-  name:'DAILY_EMA200_OVEREXTENSION',
-  status:'UNFROZEN_RESEARCH_CANDIDATE',
-  thresholdPct:25,
-  sensitivityThresholdsPct:[20,25,30],
-  rationale:'Avoid long entries after the completed 1D trend is materially overextended above EMA200.',
-  usesCompletedHigherTimeframeOnly:true,
-  tuningAfterReplay:false,
-  blindOosOpened:false,
+  name:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.name,
+  status:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.status,
+  thresholdPct:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.thresholdPct,
+  evaluatedThresholdsPct:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.evaluatedThresholdsPct,
+  sensitivityOnlyThresholdsPct:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.sensitivityOnlyThresholdsPct,
+  rationale:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.rationale,
+  usesCompletedHigherTimeframeOnly:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.usesCompletedHigherTimeframeOnly,
+  tuningAfterFreeze:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.tuningAfterFreeze,
+  oosLocked:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.oosLocked,
+  blindOosOpened:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.blindOosOpened,
+  noStrategyBehaviorChange:FROZEN_ALGO_V2_RESEARCH_CANDIDATE.noStrategyBehaviorChange,
 };
 
 const months=monthKeys(startMonth,endMonth);
@@ -151,7 +141,7 @@ function runFold(def,{thresholdPct=null,detailed=true}={}){
 
 const folds=foldDefs.map(def=>runFold(def)).filter(Boolean);
 const candidateFolds=foldDefs.map(def=>runFold(def,{thresholdPct:researchCandidate.thresholdPct})).filter(Boolean);
-const sensitivity=researchCandidate.sensitivityThresholdsPct.map(thresholdPct=>({
+const sensitivity=researchCandidate.evaluatedThresholdsPct.map(thresholdPct=>({
   thresholdPct,
   folds: thresholdPct===researchCandidate.thresholdPct
     ? candidateFolds.map(({attribution,exitReasonAttribution,signalFunnel,risk,featureOutcomes,structuralBuckets,...compact})=>compact)
