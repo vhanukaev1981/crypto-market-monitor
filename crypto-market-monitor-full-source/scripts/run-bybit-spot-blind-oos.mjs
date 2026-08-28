@@ -12,6 +12,7 @@ import {
   BLIND_OOS_RECORD_URL,
   BLIND_OOS_START_MONTH,
   assertBlindOosCanOpen,
+  assertNoCommittedBlindOosEvidence,
   assertFrozenBlindOosRecord,
   blindOosCoverageRange,
   expectedBlindOosContextMonths,
@@ -48,6 +49,7 @@ try{
 }
 
 const freezeRecord=await readFrozenAlgoV2CandidateFreezeRecord();
+await assertNoCommittedBlindOosEvidence();
 assertBlindOosCanOpen({freezeRecord,blindOosEvidenceExists:false});
 const maxExposurePctThreshold=Number(String(freezeRecord.blindOosPassCriteria.maxExposurePct).replace(/[^0-9.]/g,''));
 if(!Number.isFinite(maxExposurePctThreshold)) throw new Error('INVALID_BLIND_OOS_MAX_EXPOSURE_CRITERION');

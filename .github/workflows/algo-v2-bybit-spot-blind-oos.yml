@@ -1,22 +1,6 @@
 name: ALGO V2 Bybit Spot Blind OOS
 
 on:
-  push:
-    branches:
-      - agent/algo-v2-core-v1
-    paths:
-      - '.github/workflows/algo-v2-bybit-spot-blind-oos.yml'
-      - 'crypto-market-monitor-full-source/algo/algo-v2-candidate-freeze.mjs'
-      - 'crypto-market-monitor-full-source/algo/algo-v2-blind-oos.mjs'
-      - 'crypto-market-monitor-full-source/algo/bybit-trade-stream-import.mjs'
-      - 'crypto-market-monitor-full-source/algo/bybit-spot-archive.mjs'
-      - 'crypto-market-monitor-full-source/algo/hourly-data-quality.mjs'
-      - 'crypto-market-monitor-full-source/algo/trend-pullback-backtest.mjs'
-      - 'crypto-market-monitor-full-source/scripts/run-bybit-spot-blind-oos.mjs'
-      - 'crypto-market-monitor-full-source/tests/**'
-      - 'crypto-market-monitor-full-source/validation/SOURCE_PROVENANCE.md'
-      - 'crypto-market-monitor-full-source/validation/algo-v2-candidate-freeze.json'
-      - 'crypto-market-monitor-full-source/validation/bybit-spot-blind-oos-trigger.txt'
   workflow_dispatch:
 
 permissions:

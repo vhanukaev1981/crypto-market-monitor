@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { monthKeys, spotArchiveUrl } from './bybit-spot-archive.mjs';
 import { assertFrozenAlgoV2CandidateFreezeRecord, FROZEN_ALGO_V2_CANDIDATE_FREEZE_RECORD, FROZEN_ALGO_V2_PARAMETERS } from './algo-v2-candidate-freeze.mjs';
@@ -60,6 +60,40 @@ export function assertBlindOosCanOpen({freezeRecord=FROZEN_ALGO_V2_CANDIDATE_FRE
   return freezeRecord;
 }
 
+async function pathExists(url){
+  try{
+    await access(url);
+    return true;
+  }catch(error){
+    if(error?.code==='ENOENT') return false;
+    throw error;
+  }
+}
+
+export async function committedBlindOosEvidenceExists({
+  recordUrl=BLIND_OOS_RECORD_URL,
+  digestUrl=BLIND_OOS_DIGEST_URL,
+}={}){
+  const [recordExists,digestExists]=await Promise.all([pathExists(recordUrl),pathExists(digestUrl)]);
+  return recordExists && digestExists;
+}
+
+export async function committedBlindOosEvidenceState({
+  recordUrl=BLIND_OOS_RECORD_URL,
+  digestUrl=BLIND_OOS_DIGEST_URL,
+}={}){
+  const [recordExists,digestExists]=await Promise.all([pathExists(recordUrl),pathExists(digestUrl)]);
+  if(recordExists && digestExists) return 'COMMITTED';
+  if(recordExists || digestExists) return 'PARTIAL';
+  return 'ABSENT';
+}
+
+export async function assertNoCommittedBlindOosEvidence(options={}){
+  const state=await committedBlindOosEvidenceState(options);
+  if(state==='COMMITTED') throw new Error('BLIND_OOS_ALREADY_EXECUTED');
+  if(state==='PARTIAL') throw new Error('BLIND_OOS_EVIDENCE_STATE_INCOMPLETE');
+}
+
 export async function resolveLatestAvailableClosedSpotArchiveMonth({symbol='BTCUSDT',now=new Date(),fetchImpl=fetch}={}){
   const start=monthIndex(BLIND_OOS_START_MONTH);
   for(let probe=monthIndex(latestFullyClosedMonthUtc(now));probe>=start;probe--){
@@ -82,10 +116,12 @@ export function assertFrozenBlindOosRecord(record,{digest}={}){
   if(record.oos?.blindOosOpened!==true) throw new Error('BLIND_OOS_FLAG_MISSING');
   if(record.oos?.selectionReuseAllowed!==false) throw new Error('BLIND_OOS_SELECTION_REUSE_FORBIDDEN');
   if(record.oos?.tuningAfterFreeze!==false) throw new Error('BLIND_OOS_TUNING_DRIFT');
+  if(typeof record.oos?.promotionState!=='string' || record.oos.promotionState.length===0) throw new Error('BLIND_OOS_PROMOTION_STATE_DRIFT');
   if(record.provenance?.market!=='BYBIT_SPOT' || record.provenance?.source!=='BYBIT_PUBLIC_SPOT_TRADE_ARCHIVES') throw new Error('BLIND_OOS_PROVENANCE_DRIFT');
   for(const [key,value] of Object.entries(FROZEN_ALGO_V2_PARAMETERS)) if(record.parameters?.[key]!==value) throw new Error(`BLIND_OOS_PARAMETER_DRIFT:${key}`);
   const expectedPassCriteria=FROZEN_ALGO_V2_CANDIDATE_FREEZE_RECORD.blindOosPassCriteria;
   if(stableStringify(record.passCriteria)!==stableStringify(expectedPassCriteria)) throw new Error('BLIND_OOS_PASS_CRITERIA_DRIFT');
+  if(typeof record.evaluation?.passed!=='boolean') throw new Error('BLIND_OOS_EVALUATION_STATE_DRIFT');
   const expectedSyntheticRepairCheck=record.provenance?.syntheticRepair===false;
   if(record.evaluation?.checks?.syntheticRepair!==expectedSyntheticRepairCheck) throw new Error('BLIND_OOS_SYNTHETIC_REPAIR_CHECK_DRIFT');
   const expectedDataQualityCheck=(record.provenance?.gapCount===0 && record.provenance?.syntheticCandles===0);

@@ -1,10 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { FROZEN_ALGO_V2_CANDIDATE_FREEZE_RECORD } from '../algo/algo-v2-candidate-freeze.mjs';
 import {
   latestFullyClosedMonthUtc,
   assertBlindOosCanOpen,
   assertFrozenBlindOosRecord,
+  assertNoCommittedBlindOosEvidence,
+  committedBlindOosEvidenceExists,
+  committedBlindOosEvidenceState,
   sha256Hex,
 } from '../algo/algo-v2-blind-oos.mjs';
 
@@ -29,6 +35,51 @@ test('blind OOS opening fails closed if already opened or freeze state drifted',
       },
     }),
     /BLIND_OOS_ALREADY_OPENED/,
+  );
+});
+
+test('committed canonical OOS evidence blocks reopening across a fresh workspace even without validation-results files', async () => {
+  const workspace=await mkdtemp(join(tmpdir(),'algo-v2-blind-oos-'));
+  const validationDir=join(workspace,'validation');
+  const ephemeralDir=join(workspace,'validation-results');
+  await mkdir(validationDir,{recursive:true});
+  await mkdir(ephemeralDir,{recursive:true});
+  await writeFile(join(validationDir,'algo-v2-btcusdt-blind-oos.json'),'{}\n','utf8');
+  await writeFile(join(validationDir,'algo-v2-btcusdt-blind-oos.sha256'),'sha256:abc  algo-v2-btcusdt-blind-oos.json\n','utf8');
+  assert.equal(
+    await committedBlindOosEvidenceExists({
+      recordUrl:new URL(`file://${join(validationDir,'algo-v2-btcusdt-blind-oos.json')}`),
+      digestUrl:new URL(`file://${join(validationDir,'algo-v2-btcusdt-blind-oos.sha256')}`),
+    }),
+    true,
+  );
+  await assert.rejects(
+    ()=>assertNoCommittedBlindOosEvidence({
+      recordUrl:new URL(`file://${join(validationDir,'algo-v2-btcusdt-blind-oos.json')}`),
+      digestUrl:new URL(`file://${join(validationDir,'algo-v2-btcusdt-blind-oos.sha256')}`),
+    }),
+    /BLIND_OOS_ALREADY_EXECUTED/,
+  );
+});
+
+test('partial committed OOS sentinel state fails closed without pretending execution completed', async () => {
+  const workspace=await mkdtemp(join(tmpdir(),'algo-v2-blind-oos-partial-'));
+  const validationDir=join(workspace,'validation');
+  await mkdir(validationDir,{recursive:true});
+  await writeFile(join(validationDir,'algo-v2-btcusdt-blind-oos.json'),'{}\n','utf8');
+  assert.equal(
+    await committedBlindOosEvidenceState({
+      recordUrl:new URL(`file://${join(validationDir,'algo-v2-btcusdt-blind-oos.json')}`),
+      digestUrl:new URL(`file://${join(validationDir,'algo-v2-btcusdt-blind-oos.sha256')}`),
+    }),
+    'PARTIAL',
+  );
+  await assert.rejects(
+    ()=>assertNoCommittedBlindOosEvidence({
+      recordUrl:new URL(`file://${join(validationDir,'algo-v2-btcusdt-blind-oos.json')}`),
+      digestUrl:new URL(`file://${join(validationDir,'algo-v2-btcusdt-blind-oos.sha256')}`),
+    }),
+    /BLIND_OOS_EVIDENCE_STATE_INCOMPLETE/,
   );
 });
 
@@ -90,5 +141,19 @@ test('blind OOS verifier rejects digest drift and second selection use', () => {
       oos:{...record.oos,selectionReuseAllowed:true},
     },{digest}),
     /BLIND_OOS_SELECTION_REUSE_FORBIDDEN/,
+  );
+  assert.throws(
+    ()=>assertFrozenBlindOosRecord({
+      ...record,
+      oos:{...record.oos,promotionState:null},
+    }),
+    /BLIND_OOS_PROMOTION_STATE_DRIFT/,
+  );
+  assert.throws(
+    ()=>assertFrozenBlindOosRecord({
+      ...record,
+      evaluation:{...record.evaluation,passed:null},
+    }),
+    /BLIND_OOS_EVALUATION_STATE_DRIFT/,
   );
 });
