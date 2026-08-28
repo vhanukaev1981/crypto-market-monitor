@@ -19,6 +19,8 @@ import {
   sha256Hex,
 } from '../algo/algo-v2-blind-oos.mjs';
 
+const EXPOSURE_TOLERANCE_PCT=0.000001;
+
 function arg(name,fallback=null){
   const i=process.argv.indexOf(`--${name}`);
   return i>=0?process.argv[i+1]:fallback;
@@ -47,6 +49,8 @@ try{
 
 const freezeRecord=await readFrozenAlgoV2CandidateFreezeRecord();
 assertBlindOosCanOpen({freezeRecord,blindOosEvidenceExists:false});
+const maxExposurePctThreshold=Number(String(freezeRecord.blindOosPassCriteria.maxExposurePct).replace(/[^0-9.]/g,''));
+if(!Number.isFinite(maxExposurePctThreshold)) throw new Error('INVALID_BLIND_OOS_MAX_EXPOSURE_CRITERION');
 
 const endMonth=await resolveLatestAvailableClosedSpotArchiveMonth({symbol});
 const coverage=blindOosCoverageRange(endMonth);
@@ -115,7 +119,7 @@ const checks={
   profitFactor:metrics.profitFactor>1,
   expectancy:metrics.expectancy>0,
   maxDrawdownPct:metrics.maxDrawdownPct<=5,
-  maxExposurePct:metrics.maxObservedExposurePct<=30.000001 && metrics.maxPostControlExposurePct<=30.000001,
+  maxExposurePct:metrics.maxObservedExposurePct<=maxExposurePctThreshold+EXPOSURE_TOLERANCE_PCT && metrics.maxPostControlExposurePct<=maxExposurePctThreshold+EXPOSURE_TOLERANCE_PCT,
   syntheticRepair:validated.metadata.syntheticCount===0,
   dataQualityViolations:validated.metadata.gapCount===0 && validated.metadata.syntheticCount===0,
   tuningAfterFreeze:freezeRecord.freeze.tuningAfterFreeze===false,
@@ -148,8 +152,8 @@ const record={
     source:'BYBIT_PUBLIC_SPOT_TRADE_ARCHIVES',
     aggregation:'TRADE_STREAM_TO_OHLCV_1H',
     interval:'1h',
-    contextStartMonth:'2022-11',
-    researchWindowEndMonth:'2024-12',
+    contextStartMonth:freezeRecord.provenance.researchWindowStartMonth,
+    researchWindowEndMonth:freezeRecord.provenance.researchWindowEndMonth,
     oosStartMonth:BLIND_OOS_START_MONTH,
     oosEndMonth:endMonth,
     archiveCoverageStart:validated.metadata.first,

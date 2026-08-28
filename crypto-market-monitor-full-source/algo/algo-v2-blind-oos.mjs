@@ -26,6 +26,11 @@ function lastHourOfMonth(month){
   return new Date(Date.UTC(year,mo,1)-3600000).toISOString();
 }
 
+function firstHourOfMonth(month){
+  const [year,mo]=month.split('-').map(Number);
+  return new Date(Date.UTC(year,mo-1,1,0,0,0,0)).toISOString();
+}
+
 function stableStringify(value){
   if(Array.isArray(value)) return `[${value.map(item=>stableStringify(item)).join(',')}]`;
   if(value && typeof value==='object'){
@@ -115,6 +120,6 @@ export function blindOosCoverageRange(endMonth){
     expectedFirst:first,
     expectedLast:last,
     expectedCandleCount:(Date.parse(last)-Date.parse(first))/3600000+1,
-    oosTradingStartTime:'2025-01-01T00:00:00.000Z',
+    oosTradingStartTime:firstHourOfMonth(BLIND_OOS_START_MONTH),
   };
 }
