@@ -157,7 +157,7 @@ const record={
     candleCount:validated.metadata.candleCount,
     gapCount:validated.metadata.gapCount,
     syntheticCandles:validated.metadata.syntheticCount,
-    syntheticRepair:false,
+    syntheticRepair:validated.metadata.syntheticCount>0,
     archiveBase:'https://public.bybit.com/spot',
     knownCompressedBytes,
     manifest,
