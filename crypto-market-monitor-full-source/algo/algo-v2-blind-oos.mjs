@@ -78,10 +78,13 @@ export function assertFrozenBlindOosRecord(record,{digest}={}){
   if(record.oos?.selectionReuseAllowed!==false) throw new Error('BLIND_OOS_SELECTION_REUSE_FORBIDDEN');
   if(record.oos?.tuningAfterFreeze!==false) throw new Error('BLIND_OOS_TUNING_DRIFT');
   if(record.provenance?.market!=='BYBIT_SPOT' || record.provenance?.source!=='BYBIT_PUBLIC_SPOT_TRADE_ARCHIVES') throw new Error('BLIND_OOS_PROVENANCE_DRIFT');
-  if(record.provenance?.syntheticRepair!==false || record.provenance?.syntheticCandles!==0 || record.provenance?.gapCount!==0) throw new Error('BLIND_OOS_DATA_QUALITY_DRIFT');
   for(const [key,value] of Object.entries(FROZEN_ALGO_V2_PARAMETERS)) if(record.parameters?.[key]!==value) throw new Error(`BLIND_OOS_PARAMETER_DRIFT:${key}`);
   const expectedPassCriteria=FROZEN_ALGO_V2_CANDIDATE_FREEZE_RECORD.blindOosPassCriteria;
   if(stableStringify(record.passCriteria)!==stableStringify(expectedPassCriteria)) throw new Error('BLIND_OOS_PASS_CRITERIA_DRIFT');
+  const expectedSyntheticRepairCheck=record.provenance?.syntheticRepair===false;
+  if(record.evaluation?.checks?.syntheticRepair!==expectedSyntheticRepairCheck) throw new Error('BLIND_OOS_SYNTHETIC_REPAIR_CHECK_DRIFT');
+  const expectedDataQualityCheck=(record.provenance?.gapCount===0 && record.provenance?.syntheticCandles===0);
+  if(record.evaluation?.checks?.dataQualityViolations!==expectedDataQualityCheck) throw new Error('BLIND_OOS_DATA_QUALITY_CHECK_DRIFT');
   const serialized=`${JSON.stringify(record,null,2)}\n`;
   if(digest!=null && sha256Hex(serialized)!==digest) throw new Error('BLIND_OOS_DIGEST_MISMATCH');
   return record;

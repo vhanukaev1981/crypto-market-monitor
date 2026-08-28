@@ -69,4 +69,4 @@ jobs:
         with:
           name: algo-v2-btc-bybit-spot-blind-oos
           path: crypto-market-monitor-full-source/validation-results/BTCUSDT-SPOT-BLIND-OOS.*
-          if-no-files-found: warn
+          if-no-files-found: error

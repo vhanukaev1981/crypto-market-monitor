@@ -22,5 +22,6 @@ test('dedicated blind OOS workflow exists and uploads immutable evidence artifac
     'algo-v2-btc-bybit-spot-blind-oos',
     '--out validation-results/BTCUSDT-SPOT-BLIND-OOS.json',
     '--digest-out validation-results/BTCUSDT-SPOT-BLIND-OOS.sha256',
+    'if-no-files-found: error',
   ]) assert.match(oosWorkflow,new RegExp(requiredText.replaceAll(/[.*+?^${}()|[\]\\]/g,'\\$&')));
 });
