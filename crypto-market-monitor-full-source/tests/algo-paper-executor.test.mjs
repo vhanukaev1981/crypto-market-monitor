@@ -8,6 +8,13 @@ function engine() {
   return new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: 10, slippageBps: 5 });
 }
 
+test('rejects invalid fee and slippage configuration fail-closed', () => {
+  assert.throws(() => new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: -1, slippageBps: 0 }), /INVALID_EXECUTION_COSTS/);
+  assert.throws(() => new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: 0, slippageBps: -1 }), /INVALID_EXECUTION_COSTS/);
+  assert.throws(() => new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: Number.NaN, slippageBps: 0 }), /INVALID_EXECUTION_COSTS/);
+  assert.throws(() => new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: 0, slippageBps: Number.POSITIVE_INFINITY }), /INVALID_EXECUTION_COSTS/);
+});
+
 test('market buy uses ask plus slippage and charges fee', () => {
   const e = engine();
   e.createOrder({ clientOrderId: 'o1', symbol: 'ETHUSDT', side: 'BUY', qty: 1 });
