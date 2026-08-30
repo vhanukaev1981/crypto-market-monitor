@@ -1,6 +1,7 @@
 export class PaperExecutionEngine {
   constructor({ startingCash, takerFeeBps = 0, slippageBps = 0 }) {
     if (!Number.isFinite(startingCash) || startingCash < 0) throw new Error('INVALID_STARTING_CASH');
+    if (!Number.isFinite(takerFeeBps) || takerFeeBps < 0 || !Number.isFinite(slippageBps) || slippageBps < 0) throw new Error('INVALID_EXECUTION_COSTS');
     this.cash = startingCash;
     this.takerFeeBps = takerFeeBps;
     this.slippageBps = slippageBps;
