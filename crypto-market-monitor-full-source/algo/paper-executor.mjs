@@ -1,3 +1,24 @@
+function invalidState() { throw new Error('INVALID_STATE'); }
+
+function validatePersistedOrder(order) {
+  if (!order || typeof order !== 'object' || !order.clientOrderId || !order.symbol || !['BUY', 'SELL'].includes(order.side) || order.type !== 'MARKET') invalidState();
+  if (!Number.isFinite(order.qty) || order.qty <= 0 || !Number.isFinite(order.filledQty) || order.filledQty < 0 || order.filledQty > order.qty + 1e-12) invalidState();
+  if (!Number.isFinite(order.averageFillPrice) || order.averageFillPrice < 0 || !['CREATED', 'PARTIALLY_FILLED', 'FILLED'].includes(order.status)) invalidState();
+}
+
+function validatePersistedFill(fill) {
+  if (!fill || typeof fill !== 'object' || !fill.fillId || !fill.clientOrderId) invalidState();
+  if (!Number.isFinite(fill.qty) || fill.qty <= 0 || !Number.isFinite(fill.price) || fill.price <= 0 || !Number.isFinite(fill.fee) || fill.fee < 0 || !Number.isFinite(fill.realizedPnlDelta)) invalidState();
+  validatePersistedOrder(fill.order);
+}
+
+function validatePersistedPosition(entry) {
+  if (!Array.isArray(entry) || entry.length !== 2 || !entry[0] || !entry[1] || typeof entry[1] !== 'object') invalidState();
+  const [, position] = entry;
+  if (!Number.isFinite(position.qty) || position.qty < 0 || !Number.isFinite(position.totalCost) || position.totalCost < 0) invalidState();
+  if ((position.qty === 0) !== (position.totalCost === 0)) invalidState();
+}
+
 export class PaperExecutionEngine {
   constructor({ startingCash, takerFeeBps = 0, slippageBps = 0 }) {
     if (!Number.isFinite(startingCash) || startingCash < 0) throw new Error('INVALID_STARTING_CASH');
@@ -12,8 +33,34 @@ export class PaperExecutionEngine {
   }
 
   static fromState(state) {
-    if (!state || state.version !== 1) throw new Error('INVALID_STATE');
-    const engine = new PaperExecutionEngine({ startingCash: state.cash, takerFeeBps: state.takerFeeBps, slippageBps: state.slippageBps });
+    if (!state || state.version !== 1 || !Number.isFinite(state.cash) || state.cash < 0 || !Number.isFinite(state.takerFeeBps) || state.takerFeeBps < 0 || !Number.isFinite(state.slippageBps) || state.slippageBps < 0 || !Number.isFinite(state.realizedPnl)) invalidState();
+    if (!Array.isArray(state.orders) || !Array.isArray(state.fills) || !Array.isArray(state.positions)) invalidState();
+
+    const orderIds = new Set();
+    for (const order of state.orders) {
+      validatePersistedOrder(order);
+      if (orderIds.has(order.clientOrderId)) invalidState();
+      orderIds.add(order.clientOrderId);
+    }
+    const fillIds = new Set();
+    for (const fill of state.fills) {
+      validatePersistedFill(fill);
+      if (fillIds.has(fill.fillId) || !orderIds.has(fill.clientOrderId) || fill.order.clientOrderId !== fill.clientOrderId) invalidState();
+      fillIds.add(fill.fillId);
+    }
+    const positionSymbols = new Set();
+    for (const entry of state.positions) {
+      validatePersistedPosition(entry);
+      if (positionSymbols.has(entry[0])) invalidState();
+      positionSymbols.add(entry[0]);
+    }
+
+    let engine;
+    try {
+      engine = new PaperExecutionEngine({ startingCash: state.cash, takerFeeBps: state.takerFeeBps, slippageBps: state.slippageBps });
+    } catch {
+      invalidState();
+    }
     engine.realizedPnl = state.realizedPnl;
     engine.orders = new Map(state.orders.map((o) => [o.clientOrderId, structuredClone(o)]));
     engine.fills = new Map(state.fills.map((f) => [f.fillId, structuredClone(f)]));
