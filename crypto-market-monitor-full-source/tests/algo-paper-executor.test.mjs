@@ -84,6 +84,25 @@ test('state can be restored after restart without losing idempotency', () => {
   assert.equal(restored.snapshot().positions.ETHUSDT.qty, 2);
 });
 
+test('restart state validation rejects corrupt or ambiguous persisted state fail-closed', () => {
+  const valid = engine().exportState();
+  const invalidStates = [
+    null,
+    { ...valid, version: 2 },
+    { ...valid, cash: Number.NaN },
+    { ...valid, cash: -1 },
+    { ...valid, realizedPnl: Number.POSITIVE_INFINITY },
+    { ...valid, orders: {} },
+    { ...valid, fills: null },
+    { ...valid, positions: 'bad' },
+    { ...valid, orders: [{ clientOrderId: 'dup', symbol: 'BTCUSDT', side: 'BUY', qty: 1, type: 'MARKET', filledQty: 0, averageFillPrice: 0, status: 'CREATED' }, { clientOrderId: 'dup', symbol: 'BTCUSDT', side: 'BUY', qty: 1, type: 'MARKET', filledQty: 0, averageFillPrice: 0, status: 'CREATED' }] },
+    { ...valid, positions: [['BTCUSDT', { qty: -1, totalCost: 0 }]] },
+  ];
+  for (const state of invalidStates) {
+    assert.throws(() => PaperExecutionEngine.fromState(state), /INVALID_STATE/);
+  }
+});
+
 test('insufficient cash failure leaves portfolio unchanged', () => {
   const e = engine();
   e.createOrder({ clientOrderId: 'too-big', symbol: 'BTCUSDT', side: 'BUY', qty: 100 });
