@@ -22,7 +22,7 @@
     {
       "id": "restart-reconciliation",
       "priority": "RECONCILIATION",
-      "status": "READY",
+      "status": "DONE",
       "actionClass": "IMPLEMENT",
       "retryCount": 0,
       "maxRetries": 2,
@@ -30,7 +30,13 @@
         "ci-qualification"
       ],
       "blocker": null,
-      "evidence": []
+      "evidence": [
+        "workflow:33549961184",
+        "head:2c39ef9a48997554484794d71015eb81d41e52e0",
+        "tests:182/182",
+        "oos-lock:OOS_WINDOW_LOCKED",
+        "artifact:9817371549"
+      ]
     },
     {
       "id": "risk-enum-validation",
@@ -99,10 +105,10 @@
     }
   ],
   "lastCycle": {
-    "taskId": "data-quality-hardening",
+    "taskId": "restart-reconciliation",
     "outcome": "DONE",
     "evidence": [
-      "workflow:33548626822"
+      "workflow:33549961184"
     ]
   }
 }

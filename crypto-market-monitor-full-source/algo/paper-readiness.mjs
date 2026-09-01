@@ -13,3 +13,51 @@ export function evaluatePaperReadiness(input = {}) {
     blockers,
   };
 }
+
+function hasFreshPassingEvidence(item, { nowMs, maxEvidenceAgeMs, currentHeadSha }) {
+  return Boolean(
+    item &&
+    item.result === 'PASS' &&
+    Number.isFinite(item.checkedAtMs) &&
+    item.checkedAtMs <= nowMs &&
+    nowMs - item.checkedAtMs <= maxEvidenceAgeMs &&
+    item.headSha === currentHeadSha
+  );
+}
+
+export function evaluatePaperReadinessFromEvidence(input = {}) {
+  const { nowMs, maxEvidenceAgeMs, currentHeadSha, evidence = {} } = input;
+  const validParameters =
+    Number.isFinite(nowMs) &&
+    nowMs >= 0 &&
+    Number.isFinite(maxEvidenceAgeMs) &&
+    maxEvidenceAgeMs >= 0 &&
+    typeof currentHeadSha === 'string' &&
+    currentHeadSha.length > 0 &&
+    evidence &&
+    typeof evidence === 'object';
+
+  if (!validParameters) {
+    return {
+      status: 'BLOCKED',
+      blockers: ['READINESS_EVIDENCE_INVALID'],
+      evidenceHeadSha: null,
+    };
+  }
+
+  const context = { nowMs, maxEvidenceAgeMs, currentHeadSha };
+  const result = evaluatePaperReadiness({
+    dataFresh: hasFreshPassingEvidence(evidence.data, context),
+    riskEngineHealthy: hasFreshPassingEvidence(evidence.riskEngine, context),
+    executionEngineHealthy: hasFreshPassingEvidence(evidence.executionEngine, context),
+    reconciliationHealthy: hasFreshPassingEvidence(evidence.reconciliation, context),
+    oosLockActive: hasFreshPassingEvidence(evidence.oosLock, context),
+    liveTradingEnabled: input.liveTradingEnabled,
+    leverageEnabled: input.leverageEnabled,
+  });
+
+  return {
+    ...result,
+    evidenceHeadSha: currentHeadSha,
+  };
+}
