@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "lease": null,
+  "tasks": [
+    {
+      "id": "ci-qualification",
+      "priority": "REGRESSION",
+      "status": "DONE",
+      "actionClass": "CI",
+      "retryCount": 0,
+      "maxRetries": 2,
+      "dependsOn": [],
+      "blocker": null,
+      "evidence": [
+        "workflow:33543033810",
+        "head:ef0d64bad0598404124dfd142d425e3d9210a8f8",
+        "tests:172/172",
+        "oos-lock:OOS_WINDOW_LOCKED",
+        "artifact:9814719814"
+      ]
+    },
+    {
+      "id": "restart-reconciliation",
+      "priority": "RECONCILIATION",
+      "status": "READY",
+      "actionClass": "IMPLEMENT",
+      "retryCount": 0,
+      "maxRetries": 2,
+      "dependsOn": [
+        "ci-qualification"
+      ],
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "id": "risk-enum-validation",
+      "priority": "SAFETY",
+      "status": "READY",
+      "actionClass": "TEST",
+      "retryCount": 0,
+      "maxRetries": 2,
+      "dependsOn": [
+        "ci-qualification"
+      ],
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "id": "data-quality-hardening",
+      "priority": "DATA_QUALITY",
+      "status": "READY",
+      "actionClass": "IMPLEMENT",
+      "retryCount": 0,
+      "maxRetries": 2,
+      "dependsOn": [
+        "risk-enum-validation"
+      ],
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "id": "paper-readiness-integration",
+      "priority": "PAPER_READINESS",
+      "status": "READY",
+      "actionClass": "PAPER_INFRA",
+      "retryCount": 0,
+      "maxRetries": 2,
+      "dependsOn": [
+        "restart-reconciliation",
+        "risk-enum-validation"
+      ],
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "id": "build-observability",
+      "priority": "OBSERVABILITY",
+      "status": "READY",
+      "actionClass": "OBSERVABILITY",
+      "retryCount": 0,
+      "maxRetries": 2,
+      "dependsOn": [
+        "paper-readiness-integration"
+      ],
+      "blocker": null,
+      "evidence": []
+    }
+  ],
+  "lastCycle": {
+    "taskId": "ci-qualification",
+    "outcome": "DONE",
+    "evidence": [
+      "workflow:33543033810"
+    ]
+  }
+}
