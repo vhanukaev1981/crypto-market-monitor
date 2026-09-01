@@ -35,7 +35,7 @@
     {
       "id": "risk-enum-validation",
       "priority": "SAFETY",
-      "status": "READY",
+      "status": "DONE",
       "actionClass": "TEST",
       "retryCount": 0,
       "maxRetries": 2,
@@ -43,7 +43,13 @@
         "ci-qualification"
       ],
       "blocker": null,
-      "evidence": []
+      "evidence": [
+        "workflow:33546615119",
+        "head:1cdf4778f90652e978cd4072b59b698ecd9f6101",
+        "tests:179/179",
+        "oos-lock:OOS_WINDOW_LOCKED",
+        "artifact:9816080648"
+      ]
     },
     {
       "id": "data-quality-hardening",
@@ -87,10 +93,10 @@
     }
   ],
   "lastCycle": {
-    "taskId": "ci-qualification",
+    "taskId": "risk-enum-validation",
     "outcome": "DONE",
     "evidence": [
-      "workflow:33543033810"
+      "workflow:33546615119"
     ]
   }
 }
