@@ -51,11 +51,12 @@ export function evaluateRisk(input = {}) {
     return { decision: 'REJECTED', approvedNotional: 0, reasonCode: 'RISK_000_INVALID_EQUITY' };
   }
 
+  const validVolatilityLevels = new Set(['normal', 'elevated', 'high', 'extreme']);
   const finiteNonNegative = [dailyPnlPct, drawdownPct, currentSymbolExposurePct, maxSymbolExposurePct, requestedNotional, spreadBps, estimatedSlippageBps];
   const invalidFinite = finiteNonNegative.some((value) => !Number.isFinite(value));
   const invalidRanges = drawdownPct < 0 || currentSymbolExposurePct < 0 || maxSymbolExposurePct <= 0 || requestedNotional < 0 || spreadBps < 0 || estimatedSlippageBps < 0;
   const invalidLimits = Number.isNaN(maxSpreadBps) || maxSpreadBps < 0 || Number.isNaN(maxSlippageBps) || maxSlippageBps < 0;
-  if (invalidFinite || invalidRanges || invalidLimits) {
+  if (invalidFinite || invalidRanges || invalidLimits || !validVolatilityLevels.has(volatilityLevel)) {
     return { decision: 'REJECTED', approvedNotional: 0, reasonCode: 'RISK_001_INVALID_INPUT' };
   }
 

@@ -37,6 +37,29 @@ test('rejects invalid trade and market-risk inputs fail-closed', () => {
   }
 });
 
+test('rejects unknown volatility enum values fail-closed', () => {
+  const base = {
+    portfolioEquity: 1000,
+    dailyPnlPct: 0,
+    drawdownPct: 0,
+    currentSymbolExposurePct: 0,
+    maxSymbolExposurePct: 40,
+    requestedNotional: 100,
+    spreadBps: 2,
+    maxSpreadBps: 10,
+    estimatedSlippageBps: 2,
+    maxSlippageBps: 10,
+  };
+  for (const volatilityLevel of ['NORMAL', 'unknown', '', null, 1]) {
+    const result = evaluateRisk({ ...base, volatilityLevel });
+    assert.deepEqual(result, {
+      decision: 'REJECTED',
+      approvedNotional: 0,
+      reasonCode: 'RISK_001_INVALID_INPUT',
+    });
+  }
+});
+
 test('rejects trade when daily loss exceeds limit', () => {
   const result = evaluateRisk({
     portfolioEquity: 1000,
