@@ -54,7 +54,7 @@
     {
       "id": "data-quality-hardening",
       "priority": "DATA_QUALITY",
-      "status": "READY",
+      "status": "DONE",
       "actionClass": "IMPLEMENT",
       "retryCount": 0,
       "maxRetries": 2,
@@ -62,7 +62,13 @@
         "risk-enum-validation"
       ],
       "blocker": null,
-      "evidence": []
+      "evidence": [
+        "workflow:33548626822",
+        "head:215f99bec4c0d0b4855207f0fba293a4ef2286e7",
+        "tests:181/181",
+        "oos-lock:OOS_WINDOW_LOCKED",
+        "artifact:9816890398"
+      ]
     },
     {
       "id": "paper-readiness-integration",
@@ -93,10 +99,10 @@
     }
   ],
   "lastCycle": {
-    "taskId": "risk-enum-validation",
+    "taskId": "data-quality-hardening",
     "outcome": "DONE",
     "evidence": [
-      "workflow:33546615119"
+      "workflow:33548626822"
     ]
   }
 }

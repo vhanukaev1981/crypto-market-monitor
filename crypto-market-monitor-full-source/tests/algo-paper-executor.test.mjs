@@ -103,6 +103,37 @@ test('restart state validation rejects corrupt or ambiguous persisted state fail
   }
 });
 
+test('restart reconciliation rejects persisted accounting that disagrees with fills', () => {
+  const e = engine();
+  e.createOrder({ clientOrderId: 'reconcile-buy', symbol: 'ETHUSDT', side: 'BUY', qty: 1 });
+  e.applyMarketFill({ fillId: 'reconcile-buy-fill', clientOrderId: 'reconcile-buy', qty: 1, bid: 99, ask: 100 });
+  e.createOrder({ clientOrderId: 'reconcile-sell', symbol: 'ETHUSDT', side: 'SELL', qty: 0.25 });
+  e.applyMarketFill({ fillId: 'reconcile-sell-fill', clientOrderId: 'reconcile-sell', qty: 0.25, bid: 110, ask: 111 });
+  const valid = e.exportState();
+
+  const corruptStates = [
+    { ...structuredClone(valid), startingCash: 999 },
+    { ...structuredClone(valid), cash: valid.cash + 1 },
+    { ...structuredClone(valid), realizedPnl: valid.realizedPnl + 1 },
+    {
+      ...structuredClone(valid),
+      positions: valid.positions.map(([symbol, position]) => [symbol, { ...position, totalCost: position.totalCost + 1 }]),
+    },
+    {
+      ...structuredClone(valid),
+      fills: valid.fills.map((fill, index) => index === 0 ? { ...fill, fee: fill.fee + 1 } : fill),
+    },
+    {
+      ...structuredClone(valid),
+      orders: valid.orders.map((order, index) => index === 0 ? { ...order, filledQty: 0.5, status: 'PARTIALLY_FILLED' } : order),
+    },
+  ];
+
+  for (const state of corruptStates) {
+    assert.throws(() => PaperExecutionEngine.fromState(state), /INVALID_STATE/);
+  }
+});
+
 test('insufficient cash failure leaves portfolio unchanged', () => {
   const e = engine();
   e.createOrder({ clientOrderId: 'too-big', symbol: 'BTCUSDT', side: 'BUY', qty: 100 });

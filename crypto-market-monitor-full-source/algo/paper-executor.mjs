@@ -19,10 +19,93 @@ function validatePersistedPosition(entry) {
   if ((position.qty === 0) !== (position.totalCost === 0)) invalidState();
 }
 
+const closeEnough = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+
+function reconcilePersistedAccounting(state) {
+  const orders = new Map(state.orders.map((order) => [order.clientOrderId, order]));
+  const orderProgress = new Map();
+  const positions = new Map();
+  let cash = state.startingCash;
+  let realizedPnl = 0;
+
+  for (const fill of state.fills) {
+    const order = orders.get(fill.clientOrderId);
+    if (!order) invalidState();
+    if (
+      fill.order.clientOrderId !== order.clientOrderId ||
+      fill.order.symbol !== order.symbol ||
+      fill.order.side !== order.side ||
+      fill.order.type !== order.type ||
+      !closeEnough(fill.order.qty, order.qty)
+    ) invalidState();
+
+    const progress = orderProgress.get(order.clientOrderId) ?? { filledQty: 0, weightedPrice: 0 };
+    progress.filledQty += fill.qty;
+    progress.weightedPrice += fill.price * fill.qty;
+    if (progress.filledQty > order.qty + 1e-12) invalidState();
+    const expectedAverage = progress.weightedPrice / progress.filledQty;
+    const expectedStatus = closeEnough(progress.filledQty, order.qty) ? 'FILLED' : 'PARTIALLY_FILLED';
+    if (
+      !closeEnough(fill.order.filledQty, progress.filledQty) ||
+      !closeEnough(fill.order.averageFillPrice, expectedAverage) ||
+      fill.order.status !== expectedStatus
+    ) invalidState();
+    orderProgress.set(order.clientOrderId, progress);
+
+    const notional = fill.price * fill.qty;
+    const expectedFee = notional * state.takerFeeBps / 10000;
+    if (!closeEnough(fill.fee, expectedFee)) invalidState();
+    const position = positions.get(order.symbol) ?? { qty: 0, totalCost: 0 };
+    let expectedRealizedDelta = 0;
+    if (order.side === 'BUY') {
+      cash -= notional + fill.fee;
+      position.qty += fill.qty;
+      position.totalCost += notional + fill.fee;
+    } else {
+      if (fill.qty > position.qty + 1e-12) invalidState();
+      const averageCost = position.qty > 0 ? position.totalCost / position.qty : 0;
+      const costRemoved = averageCost * fill.qty;
+      const netProceeds = notional - fill.fee;
+      cash += netProceeds;
+      expectedRealizedDelta = netProceeds - costRemoved;
+      realizedPnl += expectedRealizedDelta;
+      position.qty -= fill.qty;
+      position.totalCost -= costRemoved;
+      if (Math.abs(position.qty) < 1e-12) {
+        position.qty = 0;
+        position.totalCost = 0;
+      }
+    }
+    if (!closeEnough(fill.realizedPnlDelta, expectedRealizedDelta)) invalidState();
+    positions.set(order.symbol, position);
+  }
+
+  for (const order of state.orders) {
+    const progress = orderProgress.get(order.clientOrderId);
+    const expectedFilled = progress?.filledQty ?? 0;
+    const expectedAverage = progress ? progress.weightedPrice / progress.filledQty : 0;
+    const expectedStatus = expectedFilled === 0 ? 'CREATED' : closeEnough(expectedFilled, order.qty) ? 'FILLED' : 'PARTIALLY_FILLED';
+    if (
+      !closeEnough(order.filledQty, expectedFilled) ||
+      !closeEnough(order.averageFillPrice, expectedAverage) ||
+      order.status !== expectedStatus
+    ) invalidState();
+  }
+
+  if (!closeEnough(state.cash, cash) || !closeEnough(state.realizedPnl, realizedPnl)) invalidState();
+  const persistedPositions = new Map(state.positions);
+  if (persistedPositions.size !== positions.size) invalidState();
+  for (const [symbol, expected] of positions) {
+    const actual = persistedPositions.get(symbol);
+    if (!actual || !closeEnough(actual.qty, expected.qty) || !closeEnough(actual.totalCost, expected.totalCost)) invalidState();
+  }
+}
+
 export class PaperExecutionEngine {
   constructor({ startingCash, takerFeeBps = 0, slippageBps = 0 }) {
     if (!Number.isFinite(startingCash) || startingCash < 0) throw new Error('INVALID_STARTING_CASH');
     if (!Number.isFinite(takerFeeBps) || takerFeeBps < 0 || !Number.isFinite(slippageBps) || slippageBps < 0) throw new Error('INVALID_EXECUTION_COSTS');
+    this.startingCash = startingCash;
     this.cash = startingCash;
     this.takerFeeBps = takerFeeBps;
     this.slippageBps = slippageBps;
@@ -33,7 +116,7 @@ export class PaperExecutionEngine {
   }
 
   static fromState(state) {
-    if (!state || state.version !== 1 || !Number.isFinite(state.cash) || state.cash < 0 || !Number.isFinite(state.takerFeeBps) || state.takerFeeBps < 0 || !Number.isFinite(state.slippageBps) || state.slippageBps < 0 || !Number.isFinite(state.realizedPnl)) invalidState();
+    if (!state || state.version !== 1 || !Number.isFinite(state.startingCash) || state.startingCash < 0 || !Number.isFinite(state.cash) || state.cash < 0 || !Number.isFinite(state.takerFeeBps) || state.takerFeeBps < 0 || !Number.isFinite(state.slippageBps) || state.slippageBps < 0 || !Number.isFinite(state.realizedPnl)) invalidState();
     if (!Array.isArray(state.orders) || !Array.isArray(state.fills) || !Array.isArray(state.positions)) invalidState();
 
     const orderIds = new Set();
@@ -54,10 +137,11 @@ export class PaperExecutionEngine {
       if (positionSymbols.has(entry[0])) invalidState();
       positionSymbols.add(entry[0]);
     }
+    reconcilePersistedAccounting(state);
 
     let engine;
     try {
-      engine = new PaperExecutionEngine({ startingCash: state.cash, takerFeeBps: state.takerFeeBps, slippageBps: state.slippageBps });
+      engine = new PaperExecutionEngine({ startingCash: state.startingCash, takerFeeBps: state.takerFeeBps, slippageBps: state.slippageBps });
     } catch {
       invalidState();
     }
@@ -71,6 +155,7 @@ export class PaperExecutionEngine {
   exportState() {
     return {
       version: 1,
+      startingCash: this.startingCash,
       cash: this.cash,
       takerFeeBps: this.takerFeeBps,
       slippageBps: this.slippageBps,
