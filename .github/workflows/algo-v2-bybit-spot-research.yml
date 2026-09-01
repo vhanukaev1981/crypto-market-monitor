@@ -21,6 +21,7 @@ on:
       - 'crypto-market-monitor-full-source/algo/paper-readiness.mjs'
       - 'crypto-market-monitor-full-source/algo/portfolio-pnl.mjs'
       - 'crypto-market-monitor-full-source/algo/autonomous-build-state.mjs'
+      - 'crypto-market-monitor-full-source/algo/autonomous-build-queue.mjs'
       - 'crypto-market-monitor-full-source/tests/**'
       - 'crypto-market-monitor-full-source/scripts/run-bybit-spot-research.mjs'
       - 'crypto-market-monitor-full-source/validation/SOURCE_PROVENANCE.md'
