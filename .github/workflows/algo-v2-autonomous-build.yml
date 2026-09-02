@@ -2,6 +2,12 @@ name: ALGO V2 Autonomous Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - agent/algo-v2-hardening-v1
+    paths:
+      - '.algo-v2-autonomous-heartbeat'
+      - '.github/workflows/algo-v2-autonomous-build.yml'
   schedule:
     - cron: '17 * * * *'
 
@@ -41,9 +47,8 @@ jobs:
           tests/algo-autonomous-build-cycle.test.mjs
 
       - name: Produce fail-closed cycle decision
-        env:
-          HEAD_SHA: ${{ github.sha }}
         run: |
+          HEAD_SHA="$(git rev-parse HEAD)"
           mkdir -p validation/autonomous-build-artifacts
           node scripts/run-autonomous-build-cycle.mjs \
             --state validation/autonomous-build-state.json \
