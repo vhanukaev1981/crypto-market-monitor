@@ -1,0 +1,63 @@
+name: ALGO V2 Autonomous Build
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: crypto-market-monitor-full-source
+
+concurrency:
+  group: algo-v2-autonomous-build
+  cancel-in-progress: false
+
+jobs:
+  autonomous-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact branch state
+        uses: actions/checkout@v4
+        with:
+          ref: agent/algo-v2-hardening-v1
+          persist-credentials: false
+
+      - name: Setup Node 22.13.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+
+      - name: Run autonomous state and planner regression
+        run: >-
+          node --test
+          tests/algo-autonomous-build-state.test.mjs
+          tests/algo-autonomous-build-queue.test.mjs
+          tests/algo-autonomous-permission-boundary.test.mjs
+          tests/algo-autonomous-build-cycle.test.mjs
+
+      - name: Produce fail-closed cycle decision
+        env:
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p validation/autonomous-build-artifacts
+          node scripts/run-autonomous-build-cycle.mjs \
+            --state validation/autonomous-build-state.json \
+            --repository vhanukaev1981/crypto-market-monitor \
+            --branch agent/algo-v2-hardening-v1 \
+            --head-sha "$HEAD_SHA" \
+            --qualification-status MISSING \
+            > validation/autonomous-build-artifacts/cycle-plan.json
+          cat validation/autonomous-build-artifacts/cycle-plan.json
+
+      - name: Upload auditable cycle decision
+        uses: actions/upload-artifact@v4
+        with:
+          name: algo-v2-autonomous-cycle-${{ github.run_id }}
+          path: crypto-market-monitor-full-source/validation/autonomous-build-artifacts/cycle-plan.json
+          if-no-files-found: error
+          retention-days: 14
