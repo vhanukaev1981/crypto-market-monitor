@@ -26,6 +26,7 @@ on:
       - 'crypto-market-monitor-full-source/algo/autonomous-build-cycle.mjs'
       - 'crypto-market-monitor-full-source/algo/autonomous-action-dispatch.mjs'
       - 'crypto-market-monitor-full-source/algo/live-canary-policy.mjs'
+      - 'crypto-market-monitor-full-source/tests/algo-live-canary-policy.test.mjs'
       - 'crypto-market-monitor-full-source/tests/**'
       - 'crypto-market-monitor-full-source/scripts/run-autonomous-build-cycle.mjs'
       - 'crypto-market-monitor-full-source/scripts/run-bybit-spot-research.mjs'
