@@ -43,7 +43,7 @@ for (const file of files) {
     addFinding(findings, "critical", file, "נמצאה הפעלה מפורשת של משיכות");
   }
 
-  if (/https:\/\/api\.bybit\.com/i.test(text) && /\/v5\/order\/create/i.test(text)) {
+  if (/https:\/\/api\.bybit\.com[^"'`\s]*\/v5\/order\/create|\/v5\/order\/create[^"'`\s]*https:\/\/api\.bybit\.com/i.test(text)) {
     addFinding(findings, "critical", file, "נמצאה יצירת פקודה מול כתובת Mainnet");
   }
 
