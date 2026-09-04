@@ -18,8 +18,26 @@ permissions:
   contents: read
 
 jobs:
-  readonly-connectivity:
+  safety-regression:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+      - name: Run READ_ONLY safety regression
+        working-directory: crypto-market-monitor-full-source
+        run: node --test tests/algo-bybit-live-adapter.test.mjs tests/algo-bybit-readonly-transport.test.mjs tests/algo-bybit-readonly-diagnostic.test.mjs
+
+  readonly-connectivity:
+    needs: safety-regression
+    # Bybit documents that US-origin IPs receive HTTP 403. GitHub-hosted runners
+    # can execute from US regions (the failed run was westus3), so authenticated
+    # exchange connectivity must run on an explicitly controlled non-US runner.
+    runs-on: [self-hosted, linux, x64, bybit-non-us]
     timeout-minutes: 5
     env:
       BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
@@ -31,9 +49,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22.13.0'
-      - name: Run READ_ONLY safety regression
-        working-directory: crypto-market-monitor-full-source
-        run: node --test tests/algo-bybit-live-adapter.test.mjs tests/algo-bybit-readonly-transport.test.mjs tests/algo-bybit-readonly-diagnostic.test.mjs
       - name: Verify secrets are present without printing values
         shell: bash
         run: |
