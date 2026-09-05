@@ -30,6 +30,7 @@ const shellCss = `
 
 const navItems = [
   { href: "/platform", label: "מרכז שליטה", icon: "⌂" },
+  { href: "/platform/runtime", label: "Runtime חי", icon: "⌁" },
   { href: "/", label: "Trading OS", icon: "◉" },
 ];
 
@@ -91,7 +92,7 @@ export default function PlatformLayout({ children }: { children: ReactNode }) {
         <div className="platform-section-label">מרכז העבודה</div>
         <nav className="platform-nav">
           {navItems.map((item) => {
-            const active = item.href === "/platform" ? pathname.startsWith("/platform") : pathname === item.href;
+            const active = item.href === "/platform" ? pathname === "/platform" : pathname === item.href;
             return (
               <a key={item.href} href={item.href} className={active ? "active" : ""} aria-current={active ? "page" : undefined}>
                 <span className="platform-nav-icon">{item.icon}</span>
