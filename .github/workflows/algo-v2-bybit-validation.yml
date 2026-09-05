@@ -5,6 +5,7 @@ on:
     branches:
       - agent/algo-v2-core-v1
       - agent/algo-v2-hardening-v1
+      - agent/algo-v2-bybit-order-transport
     paths:
       - .github/workflows/algo-v2-bybit-validation.yml
       - crypto-market-monitor-full-source/algo/**
