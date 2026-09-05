@@ -1,4 +1,4 @@
-﻿name: ALGO V2 Bybit Live Readiness
+name: ALGO V2 Bybit Live Readiness
 
 on:
   workflow_dispatch:
@@ -54,4 +54,15 @@ jobs:
           echo 'Required Bybit secrets are present.'
       - name: Run Bybit Live Readiness Diagnostic (Read-Only)
         working-directory: crypto-market-monitor-full-source
-        run: node scripts/check-bybit-live-readiness.mjs
+        run: |
+          set +e
+          node scripts/check-bybit-live-readiness.mjs > /tmp/bybit_readiness.json 2>&1
+          EXIT_CODE=$?
+          cat /tmp/bybit_readiness.json
+          if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/bybit_readiness.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $EXIT_CODE
+
