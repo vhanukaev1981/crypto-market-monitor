@@ -191,37 +191,73 @@ export default function Home(){
  const verifyCode=async()=>{
   setAuthBusy(true);setAuthMessage("");setAuthSuccessMessage("");
   const input=code.trim();
-  if(!input)return;
-  if(input.includes("access_token=")||input.startsWith("http")){
+  if(!input){setAuthBusy(false);return;}
+
+  const applyNewPassword=async()=>{
+   if(newPassword.trim()){
+    const {error:pwdErr}=await supabase.auth.updateUser({password:newPassword.trim()});
+    if(!pwdErr){
+     setPasswordToast("✓ סיסמת המספרים נקבעה בהצלחה! מעתה תוכל להתחבר ישירות עם המייל וסיסמת המספרים שלך.");
+    }
+   }
+  };
+
+  // 1. URL contains access_token
+  if(input.includes("access_token=")){
    const match=input.match(/access_token=([^&]+)/),refreshMatch=input.match(/refresh_token=([^&]+)/);
    if(match){
-    const {data,error}=await supabase.auth.setSession({access_token:match[1],refresh_token:refreshMatch?refreshMatch[1]:""});
+    const {data,error}=await supabase.auth.setSession({
+     access_token:decodeURIComponent(match[1]),
+     refresh_token:refreshMatch?decodeURIComponent(refreshMatch[1]):""
+    });
     if(error){
      setAuthBusy(false);
-     setAuthMessage("הקישור או הטוקן שהודבק אינם תקינים.");
+     setAuthMessage("הטוקן או הקישור פג תוקף. נסה להעתיק שוב או לשלוח מייל חדש.");
      return;
     }
-    if(newPassword.trim()){
-     await supabase.auth.updateUser({password:newPassword.trim()});
-     setPasswordToast("✓ הסיסמה הקבועה נשמרה בהצלחה!");
-    }
+    await applyNewPassword();
     setAuthBusy(false);
     if(data.user)setUser(data.user);
     return;
    }
   }
-  const {data,error}=await supabase.auth.verifyOtp({email:email.trim(),token:input,type:"email"});
-  if(error){
-   setAuthBusy(false);
-   setAuthMessage("הקוד שגוי או שפג תוקפו. הזן את הקוד בן 6 הספרות מהמייל האחרון.");
-   return;
-  }
-  if(newPassword.trim()){
-   const {error:pwdErr}=await supabase.auth.updateUser({password:newPassword.trim()});
-   if(!pwdErr){
-    setPasswordToast("✓ הסיסמה הקבועה נשמרה בהצלחה! מעתה תוכל להתחבר ישירות עם סיסמה זו.");
+
+  // 2. HTTP/HTTPS URL from email button or redirect
+  if(input.startsWith("http://")||input.startsWith("https://")){
+   try{
+    const res=await fetch("/api/auth/resolve",{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({url:input})
+    });
+    const json=await res.json();
+    if(json.ok&&json.access_token){
+     const {data,error}=await supabase.auth.setSession({
+      access_token:json.access_token,
+      refresh_token:json.refresh_token||""
+     });
+     if(!error&&data.user){
+      await applyNewPassword();
+      setAuthBusy(false);
+      setUser(data.user);
+      return;
+     }
+    }
+   }catch(err){
+    console.error("Resolve error:",err);
    }
   }
+
+  // 3. Fallback to OTP token or 6-digit number
+  const tokenParam=input.match(/[?&]token=([^&#]+)/);
+  const cleanToken=tokenParam?tokenParam[1]:input;
+  const {data,error}=await supabase.auth.verifyOtp({email:email.trim(),token:cleanToken,type:"email"});
+  if(error){
+   setAuthBusy(false);
+   setAuthMessage("לא הצלחנו לאמת. ודא שהעתקת את כתובת הקישור מהכפתור במייל (קליק ימני על הכפתור -> העתק כתובת קישור).");
+   return;
+  }
+  await applyNewPassword();
   setAuthBusy(false);
   if(data.user)setUser(data.user);
  };
@@ -258,7 +294,7 @@ export default function Home(){
  const dashboardCards=useMemo(()=>[["שווי החשבון",pick(summary,"account_equity_usdt"),"usd"],["USDT זמין",pick(summary,"available_balance_usdt"),"usd"],["חשיפה פתוחה",pick(summary,"open_exposure_usdt"),"usd"],["רווח/הפסד ממומש",pick(summary,"realized_today"),"usd"],["רווח/הפסד לא ממומש",pick(summary,"unrealized_pnl"),"usd"],["הון ייחוס",pick(summary,"reference_capital_usdt"),"usd"],["ספירת פוזיציות",pick(summary,"open_positions"),"num"]] as const,[summary]);
  const shownPositions=positions.filter(p=>{const pnl=num(p.unrealized_pnl);if(filter==="הכול")return true;if(filter==="Spot"||filter==="Futures")return market(p)===filter;if(filter==="Long"||filter==="Short")return side(p)===filter;if(filter==="רווח")return pnl!==null&&pnl>0;if(filter==="הפסד")return pnl!==null&&pnl<0;return protection(p)==="native_verified"});
  if(!authReady)return <main className="login-shell"><div className="auth-loading"><div className="brand-glyph">C</div><strong>פותח סביבת מסחר מאובטחת…</strong></div></main>;
-  if(!user)return <main className="login-shell" dir="rtl"><section className="login-stage"><div className="login-story"><div className="product-lockup"><div className="brand-glyph">C</div><div><strong>CRYPTO MARKET MONITOR</strong><span>TRADING OS</span></div></div><div className="login-copy"><span className="demo-pill">● סביבת Demo מאובטחת</span><h1>Crypto Market Monitor<br/><em>Trading OS</em></h1><h2>מערכת המסחר האלגוריתמית האישית</h2><p>גישה פרטית לחשבון, לבוטים, לפוזיציות, לאסטרטגיות ולסיכון.</p></div><div className="security-line"><span>◈</span><div><strong>פרטי. מאובטח. מחובר.</strong><small>הנתונים נשמרים תחת החשבון האישי שלך בלבד.</small></div></div></div><div className="login-panel"><div className="login-panel-head"><span className="login-lock">⌾</span><span className="panel-kicker">כניסה מאובטחת</span><h2>כניסה למערכת</h2><p>בחר את דרך ההתחברות הנוחה עבורך:</p></div><div style={{display:"flex",gap:8,margin:"16px 0 12px"}}><button type="button" style={{flex:1,padding:"10px 8px",borderRadius:9,border:"1px solid "+(authMode==="password"?"#27c9ea":"#1d2d45"),background:authMode==="password"?"rgba(39,201,234,0.15)":"#07111f",color:authMode==="password"?"#fff":"#8da0b9",cursor:"pointer",fontWeight:800,fontSize:13}} onClick={()=>{setAuthMode("password");setAuthMessage("");setAuthSuccessMessage("")}}>🔑 כניסה עם סיסמה</button><button type="button" style={{flex:1,padding:"10px 8px",borderRadius:9,border:"1px solid "+(authMode==="code"?"#27c9ea":"#1d2d45"),background:authMode==="code"?"rgba(39,201,234,0.15)":"#07111f",color:authMode==="code"?"#fff":"#8da0b9",cursor:"pointer",fontWeight:800,fontSize:13}} onClick={()=>{setAuthMode("code");setAuthMessage("");setAuthSuccessMessage("")}}>✉️ קוד / קביעת סיסמה</button></div>{authMode==="password"?<form onSubmit={handlePasswordLogin} className="login-form"><label>כתובת מייל<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@example.com" required/></label><label>סיסמה<div style={{position:"relative",display:"flex",alignItems:"center"}}><input type={showPassword?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="הזן סיסמה" required style={{paddingLeft:40}}/><button type="button" onClick={()=>setShowPassword(v=>!v)} style={{position:"absolute",left:8,background:"none",border:"none",color:"#8da0b9",cursor:"pointer",padding:4,fontSize:14}} title={showPassword?"הסתר":"הצג"}>{showPassword?"🙈":"👁️"}</button></div></label>{authMessage&&<div className="auth-message" style={{color:"#ff8a9b",borderColor:"rgba(255,138,155,0.3)"}}>{authMessage}</div>}<button type="submit" disabled={authBusy||!email.trim()||!password}>{authBusy?"מתחבר…":"כניסה מיידית למערכת"}</button><button type="button" className="secondary" onClick={()=>{setAuthMode("code");setAuthMessage("")}} style={{cursor:"pointer",marginTop:4}}>טרם הגדרת סיסמה או שכחת? לחץ כאן לכניסה עם קוד במייל ←</button></form>:<div className="login-form"><label>כתובת מייל<input type="email" value={email} onChange={e=>setEmail(e.target.value)} disabled={sent} placeholder="name@example.com"/></label>{sent&&<><label>קוד אימות (6 ספרות מהמייל) או הדבקת קישור<input className="otp" value={code} onChange={e=>setCode(e.target.value)} placeholder="למשל 123456 או הדבק קישור" autoFocus/></label><label>קבע סיסמה קבועה כעת (מומלץ מאוד!)<input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="בחר סיסמה קבועה לכניסה ללא מייל"/><small style={{color:"#8da0b9",fontSize:11}}>לאחר ההגדרה תוכל להתחבר תמיד בלחיצה אחת עם סיסמה זו.</small></label></>}{authMessage&&<div className="auth-message" style={{color:"#ff8a9b",borderColor:"rgba(255,138,155,0.3)"}}>{authMessage}</div>}{authSuccessMessage&&<div className="auth-message" style={{color:"#52efb7",borderColor:"rgba(82,239,183,0.3)"}}>{authSuccessMessage}</div>}<button type="button" disabled={authBusy||!email.trim()||(sent&&!code.trim())} onClick={sent?verifyCode:sendCode}>{authBusy?"ממתין…":sent?"אימות וכניסה למערכת":"שליחת קוד חד־פעמי למייל"}</button>{sent?<button type="button" className="secondary" onClick={()=>{setSent(false);setCode("");setAuthMessage("");setAuthSuccessMessage("")}}>שליחה מחדש או שינוי כתובת מייל</button>:<button type="button" className="secondary" onClick={()=>setSent(true)}>יש לי כבר קוד שנשלח למייל</button>}<button type="button" className="secondary" onClick={()=>{setAuthMode("password");setAuthMessage("")}} style={{cursor:"pointer",marginTop:2}}>חזרה לכניסה רגילה עם סיסמה →</button></div>}<div className="live-locked"><span>LIVE</span><strong>מצב Live נעול</strong><small>המערכת פעילה בסביבת Demo בלבד</small></div></div></section></main>;
+   if(!user)return <main className="login-shell" dir="rtl"><section className="login-stage"><div className="login-story"><div className="product-lockup"><div className="brand-glyph">C</div><div><strong>CRYPTO MARKET MONITOR</strong><span>TRADING OS</span></div></div><div className="login-copy"><span className="demo-pill">● סביבת Demo מאובטחת</span><h1>Crypto Market Monitor<br/><em>Trading OS</em></h1><h2>מערכת המסחר האלגוריתמית האישית</h2><p>גישה פרטית לחשבון, לבוטים, לפוזיציות, לאסטרטגיות ולסיכון.</p></div><div className="security-line"><span>◈</span><div><strong>פרטי. מאובטח. מחובר.</strong><small>הנתונים נשמרים תחת החשבון האישי שלך בלבד.</small></div></div></div><div className="login-panel"><div className="login-panel-head"><span className="login-lock">⌾</span><span className="panel-kicker">כניסה מאובטחת</span><h2>כניסה למערכת</h2><p>בחר את דרך ההתחברות הנוחה עבורך:</p></div><div style={{display:"flex",gap:8,margin:"16px 0 12px"}}><button type="button" style={{flex:1,padding:"10px 8px",borderRadius:9,border:"1px solid "+(authMode==="password"?"#27c9ea":"#1d2d45"),background:authMode==="password"?"rgba(39,201,234,0.15)":"#07111f",color:authMode==="password"?"#fff":"#8da0b9",cursor:"pointer",fontWeight:800,fontSize:13}} onClick={()=>{setAuthMode("password");setAuthMessage("");setAuthSuccessMessage("")}}>🔑 כניסה עם סיסמה (מספרים)</button><button type="button" style={{flex:1,padding:"10px 8px",borderRadius:9,border:"1px solid "+(authMode==="code"?"#27c9ea":"#1d2d45"),background:authMode==="code"?"rgba(39,201,234,0.15)":"#07111f",color:authMode==="code"?"#fff":"#8da0b9",cursor:"pointer",fontWeight:800,fontSize:13}} onClick={()=>{setAuthMode("code");setAuthMessage("");setAuthSuccessMessage("")}}>✉️ קביעת סיסמת מספרים / קישור</button></div>{authMode==="password"?<form onSubmit={handlePasswordLogin} className="login-form"><label>כתובת מייל<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@example.com" required/></label><label>סיסמה (מספרים)<div style={{position:"relative",display:"flex",alignItems:"center"}}><input type={showPassword?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="הזן את סיסמת המספרים שלך" required style={{paddingLeft:40}}/><button type="button" onClick={()=>setShowPassword(v=>!v)} style={{position:"absolute",left:8,background:"none",border:"none",color:"#8da0b9",cursor:"pointer",padding:4,fontSize:14}} title={showPassword?"הסתר":"הצג"}>{showPassword?"🙈":"👁️"}</button></div></label>{authMessage&&<div className="auth-message" style={{color:"#ff8a9b",borderColor:"rgba(255,138,155,0.3)"}}>{authMessage}</div>}<button type="submit" disabled={authBusy||!email.trim()||!password}>{authBusy?"מתחבר…":"כניסה מיידית למערכת"}</button><button type="button" className="secondary" onClick={()=>{setAuthMode("code");setAuthMessage("")}} style={{cursor:"pointer",marginTop:4}}>טרם הגדרת סיסמת מספרים לחשבון? לחץ כאן לקביעת סיסמה ←</button></form>:<div className="login-form"><div style={{background:"rgba(39,201,234,0.08)",border:"1px solid rgba(39,201,234,0.2)",borderRadius:9,padding:"10px 12px",color:"#c5eef7",fontSize:12,lineHeight:1.5,marginBottom:12}}>💡 <strong>למה אין מספרים במייל?</strong> המייל מסופאבייס מכיל כפתור כניסה בלבד (ללא סיסמה).<br/>להגדרת סיסמת מספרים קבועה: העתק את הקישור מהכפתור במייל, הדבק כאן ובחר סיסמה.</div><label>כתובת מייל<input type="email" value={email} onChange={e=>setEmail(e.target.value)} disabled={sent} placeholder="name@example.com"/></label>{sent&&<><label>הדבק את הקישור מהמייל או שורת הכתובות<input className="otp" value={code} onChange={e=>setCode(e.target.value)} placeholder="קליק ימני על הכפתור במייל -> העתק קישור -> הדבק כאן" autoFocus/></label><label>בחר את סיסמת המספרים הקבועה שלך (חובה)<input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="למשל 123456 או כל רצף מספרים (לפחות 6 ספרות)"/><small style={{color:"#8da0b9",fontSize:11}}>לאחר שמירה זו, לעולם לא תצטרך מיילים — תיכנס תמיד ישירות עם המספרים הללו.</small></label></>}{authMessage&&<div className="auth-message" style={{color:"#ff8a9b",borderColor:"rgba(255,138,155,0.3)"}}>{authMessage}</div>}{authSuccessMessage&&<div className="auth-message" style={{color:"#52efb7",borderColor:"rgba(82,239,183,0.3)"}}>{authSuccessMessage}</div>}<button type="button" disabled={authBusy||!email.trim()||(sent&&!code.trim())} onClick={sent?verifyCode:sendCode}>{authBusy?"ממתין…":sent?"שמור סיסמת מספרים וכנס למערכת":"שליחת מייל עם כפתור קישור"}</button>{sent?<button type="button" className="secondary" onClick={()=>{setSent(false);setCode("");setAuthMessage("");setAuthSuccessMessage("")}}>שליחה מחדש של מייל</button>:<button type="button" className="secondary" onClick={()=>setSent(true)}>יש לי כבר את המייל שנשלח</button>}<button type="button" className="secondary" onClick={()=>{setAuthMode("password");setAuthMessage("")}} style={{cursor:"pointer",marginTop:2}}>חזרה לכניסה ישירה עם סיסמה →</button></div>}<div className="live-locked"><span>LIVE</span><strong>מצב Live נעול</strong><small>המערכת פעילה בסביבת Demo בלבד</small></div></div></section></main>;
 
  const Status=({label,value}:{label:string;value:unknown})=><div><span>{label}</span><strong dir="ltr">{txt(value)}</strong></div>;
  const AccountBreakdown=()=>{const account=(snapshot?.account&&typeof snapshot.account==="object"?snapshot.account:{}) as Row,assets=Array.isArray(snapshot?.assets)?snapshot.assets as Row[]:[],managed=new Set(positions.filter(p=>market(p)==="Spot").map(p=>txt(p.symbol,"").replace(/USDT$/i,"")));return <section className="panel account-panel"><div className="section-head"><div><span className="kicker">מקור אמת: Bybit Demo</span><h2>פירוט חשבון Bybit Demo</h2><p>פירוט מסביר בלבד — שווי החשבון אינו מחושב מחדש מרכיבים אלה</p></div><span className={`record-count ${bool(snapshot?.stale)?"snapshot-stale":""}`}>{bool(snapshot?.stale)?"הנתון האחרון שהתקבל":"Snapshot חי"}</span></div><div className="account-grid">{[["שווי חשבון כולל",account.total_equity,"usd"],["יתרה זמינה",account.total_available_balance,"usd"],["USDT Equity",assets.find(a=>txt(a.coin)==="USDT")?.equity,"usd"],["Spot Assets",assets.filter(a=>txt(a.coin)!=="USDT").length,"num"],["Futures Unrealized PnL",account.total_perp_upl,"usd"],["Initial Margin",account.total_initial_margin,"usd"],["Maintenance Margin",account.total_maintenance_margin,"usd"],["פקודות Spot פתוחות",snapshot?.spot_open_orders,"num"],["פקודות Futures פתוחות",snapshot?.linear_open_orders,"num"],["זמן המדידה",when(snapshot?.checked_at),"text"]].map(([label,value,kind])=><article key={String(label)}><span>{String(label)}</span>{kind==="text"?<strong dir="ltr">{txt(value)}</strong>:<Value value={value} kind={kind as "usd"|"num"}/>}</article>)}</div><div className="asset-table"><div className="asset-head"><span>מטבע</span><span>כמות</span><span>שווי בדולרים</span><span>נעול</span><span>סיווג</span></div>{assets.map((asset,i)=>{const coin=txt(asset.coin),value=num(asset.usd_value)??0,label=managed.has(coin)?"מנוהל על ידי הבוט":Math.abs(value)>1?"נכס נוסף בחשבון":"שארית קטנה";return <article key={`${coin}-${i}`}><strong dir="ltr">{coin}</strong><span dir="ltr">{dec(asset.wallet_balance,10)}</span><span dir="ltr">{usd(asset.usd_value)}</span><span dir="ltr">{dec(asset.locked,10)}</span><em>{label}</em></article>})}{!assets.length&&<Empty>אין עדיין נתוני נכסים זמינים</Empty>}</div></section>};
