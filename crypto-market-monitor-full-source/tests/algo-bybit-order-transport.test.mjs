@@ -74,3 +74,100 @@ test('placeOrder fails closed on HTTP or Bybit API rejection', async () => {
   const api = createBybitV5ReadOnlyTransport({ apiKey: API_KEY, apiSecret: API_SECRET, now: () => NOW, fetchImpl: async () => response({ retCode: 10001, retMsg: 'bad request' }) });
   await assert.rejects(() => api.request(validOrder()), /API failure 10001/);
 });
+
+test('reconcileOrder signs GET /v5/order/realtime and normalizes order result', async () => {
+  const calls = [];
+  const mockOrder = {
+    orderId: 'bybit-ord-999',
+    orderLinkId: 'algobot-canary-001',
+    symbol: 'BTCUSDT',
+    side: 'Buy',
+    orderType: 'Market',
+    orderStatus: 'Filled',
+    qty: '10',
+    cumExecQty: '0.00015',
+    cumExecValue: '10.00',
+    cumExecFee: '0.01',
+    avgPrice: '66666.66',
+  };
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return response({ retCode: 0, retMsg: 'OK', result: { list: [mockOrder], category: 'spot' } });
+  };
+  const transport = createBybitV5ReadOnlyTransport({ apiKey: API_KEY, apiSecret: API_SECRET, now: () => NOW, fetchImpl });
+
+  const resDirect = await transport.reconcileOrder({ orderLinkId: 'algobot-canary-001', symbol: 'BTCUSDT' });
+  assert.equal(resDirect.retCode, 0);
+  assert.equal(resDirect.result.orderStatus, 'Filled');
+  assert.equal(resDirect.result.orderId, 'bybit-ord-999');
+  assert.equal(resDirect.result.category, 'spot');
+
+  const call = calls[0];
+  assert.match(call.url, /\/v5\/order\/realtime\?category=spot&symbol=BTCUSDT&orderLinkId=algobot-canary-001/);
+  assert.equal(call.init.method, 'GET');
+  const expectedQuery = 'category=spot&symbol=BTCUSDT&orderLinkId=algobot-canary-001';
+  const expectedSign = createHmac('sha256', API_SECRET).update(`${NOW}${API_KEY}${RECV_WINDOW}${expectedQuery}`).digest('hex');
+  assert.equal(call.init.headers['X-BAPI-SIGN'], expectedSign);
+  assert.ok(!JSON.stringify(call).includes(API_SECRET));
+
+  // Also via transport.request({ operation: 'reconcileOrder', ... })
+  const resOp = await transport.request({ operation: 'reconcileOrder', orderLinkId: 'algobot-canary-001', symbol: 'BTCUSDT' });
+  assert.equal(resOp.result.orderStatus, 'Filled');
+});
+
+test('reconcileOrder falls back to /v5/order/history when realtime returns empty list', async () => {
+  const calls = [];
+  const mockOrder = {
+    orderId: 'bybit-ord-hist-1',
+    orderLinkId: 'canary-hist-1',
+    symbol: 'BTCUSDT',
+    side: 'Buy',
+    orderType: 'Market',
+    orderStatus: 'Filled',
+    cumExecQty: '0.00015',
+    cumExecValue: '10.00',
+  };
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.includes('/v5/order/realtime')) {
+      return response({ retCode: 0, retMsg: 'OK', result: { list: [], category: 'spot' } });
+    }
+    if (url.includes('/v5/order/history')) {
+      return response({ retCode: 0, retMsg: 'OK', result: { list: [mockOrder], category: 'spot' } });
+    }
+    return response({}, { ok: false, status: 404 });
+  };
+  const transport = createBybitV5ReadOnlyTransport({ apiKey: API_KEY, apiSecret: API_SECRET, now: () => NOW, fetchImpl });
+  const res = await transport.reconcileOrder({ orderLinkId: 'canary-hist-1', symbol: 'BTCUSDT' });
+  assert.equal(res.result.orderId, 'bybit-ord-hist-1');
+  assert.equal(res.result.orderStatus, 'Filled');
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].url, /\/v5\/order\/realtime/);
+  assert.match(calls[1].url, /\/v5\/order\/history/);
+});
+
+test('reconcileOrder fails closed when order is not found in realtime or history', async () => {
+  const fetchImpl = async () => response({ retCode: 0, retMsg: 'OK', result: { list: [], category: 'spot' } });
+  const transport = createBybitV5ReadOnlyTransport({ apiKey: API_KEY, apiSecret: API_SECRET, now: () => NOW, fetchImpl });
+  await assert.rejects(
+    () => transport.reconcileOrder({ orderLinkId: 'missing-order', symbol: 'BTCUSDT' }),
+    /not found on exchange/i
+  );
+});
+
+test('reconcileOrder fails closed on non-spot, leverage, or missing order identifiers', async () => {
+  const transport = createBybitV5ReadOnlyTransport({ apiKey: API_KEY, apiSecret: API_SECRET, now: () => NOW, fetchImpl: async () => response({ retCode: 0 }) });
+  const invalid = [
+    { category: 'linear', orderLinkId: 'valid-1' },
+    { leverage: 2, orderLinkId: 'valid-1' },
+    { isLeverage: 1, orderLinkId: 'valid-1' },
+    { orderLinkId: '' },
+    { symbol: 'invalid/sym', orderLinkId: 'valid-1' },
+    {},
+  ];
+  for (const req of invalid) {
+    await assert.rejects(() => transport.reconcileOrder(req));
+    await assert.rejects(() => transport.request({ operation: 'reconcileOrder', ...req }));
+  }
+});
+

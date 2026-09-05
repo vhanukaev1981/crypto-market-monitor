@@ -50,13 +50,13 @@ export function createBybitV5ReadOnlyTransport(config = {}) {
   }
 
   function validateSpotMarketOrder(request) {
-    if (request.category !== 'spot') throw new Error('Bybit order transport is Spot only');
+    if (request.category !== undefined && request.category !== 'spot') throw new Error('Bybit order transport is Spot only');
     if ('leverage' in request || 'isLeverage' in request || 'marginMode' in request) throw new Error('Leverage or margin semantics are forbidden');
-    if (request.orderType !== 'Market') throw new Error('Only Spot Market canary orders are supported');
+    if (request.orderType !== undefined && request.orderType !== 'Market') throw new Error('Only Spot Market canary orders are supported');
     if (!/^[A-Z0-9]{3,24}$/.test(request.symbol ?? '')) throw new Error('Invalid Bybit Spot symbol');
     if (request.side !== 'Buy' && request.side !== 'Sell') throw new Error('Invalid Bybit order side');
     if (!Number.isFinite(Number(request.qty)) || Number(request.qty) <= 0) throw new Error('Invalid Bybit order quantity');
-    if (request.marketUnit !== 'quoteCoin') throw new Error('Canary order quantity must use quoteCoin market unit');
+    if (request.marketUnit !== undefined && request.marketUnit !== 'quoteCoin') throw new Error('Canary order quantity must use quoteCoin market unit');
     if (typeof request.orderLinkId !== 'string' || request.orderLinkId.length < 1 || request.orderLinkId.length > 36) throw new Error('Invalid Bybit orderLinkId');
   }
 
@@ -81,11 +81,72 @@ export function createBybitV5ReadOnlyTransport(config = {}) {
     }));
   }
 
+  function validateReconcileRequest(request) {
+    if (request.category !== undefined && request.category !== 'spot') {
+      throw new Error('Bybit reconciliation is Spot only');
+    }
+    if ('leverage' in request || 'isLeverage' in request || 'marginMode' in request) {
+      throw new Error('Leverage or margin semantics are forbidden');
+    }
+    const hasOrderLinkId = typeof request.orderLinkId === 'string' && request.orderLinkId.trim().length > 0;
+    const hasOrderId = typeof request.orderId === 'string' && request.orderId.trim().length > 0;
+    if (!hasOrderLinkId && !hasOrderId) {
+      throw new Error('Either orderLinkId or orderId is required for reconciliation');
+    }
+    if (request.symbol !== undefined && !/^[A-Z0-9]{3,24}$/.test(request.symbol)) {
+      throw new Error('Invalid Bybit Spot symbol');
+    }
+  }
+
+  async function reconcileOrder(request = {}) {
+    validateReconcileRequest(request);
+    const queryParts = ['category=spot'];
+    if (request.symbol) queryParts.push(`symbol=${encodeURIComponent(request.symbol)}`);
+    if (request.orderLinkId) queryParts.push(`orderLinkId=${encodeURIComponent(request.orderLinkId)}`);
+    if (request.orderId) queryParts.push(`orderId=${encodeURIComponent(request.orderId)}`);
+    const query = queryParts.join('&');
+
+    let response = await signedGet('/v5/order/realtime', query);
+    let order = response?.result?.list?.[0];
+
+    if (!order) {
+      const historyResponse = await signedGet('/v5/order/history', query);
+      order = historyResponse?.result?.list?.[0];
+    }
+
+    if (!order) {
+      throw new Error(`Bybit order reconciliation failed: order '${request.orderLinkId || request.orderId}' not found on exchange`);
+    }
+
+    return {
+      retCode: 0,
+      retMsg: 'OK',
+      result: {
+        orderId: order.orderId,
+        orderLinkId: order.orderLinkId,
+        symbol: order.symbol,
+        side: order.side,
+        orderType: order.orderType,
+        orderStatus: order.orderStatus,
+        qty: order.qty,
+        cumExecQty: order.cumExecQty,
+        cumExecValue: order.cumExecValue,
+        cumExecFee: order.cumExecFee,
+        avgPrice: order.avgPrice,
+        category: 'spot',
+        raw: order,
+      }
+    };
+  }
+
   return Object.freeze({
+    placeOrder,
+    reconcileOrder,
     async request(request = {}) {
       if (request.operation === 'accountSnapshot') return accountSnapshot();
       if (request.operation === 'queryApiPermissions') return queryApiPermissions();
       if (request.operation === 'placeOrder') return placeOrder(request);
+      if (request.operation === 'reconcileOrder') return reconcileOrder(request);
       throw new Error('Unsupported Bybit operation');
     }
   });
