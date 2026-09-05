@@ -60,48 +60,27 @@ function Skeleton(){return <div className="skeleton-grid" aria-label="טוען �
 
 export default function Home(){
  const [user,setUser]=useState<User|null>(null),[authReady,setAuthReady]=useState(false);
- const [authMode,setAuthMode]=useState<"password"|"code">("password");
+ const [step,setStep]=useState<"email"|"otp">("email");
  const [email,setEmail]=useState("vadim.hanukaev1981@gmail.com");
- const [password,setPassword]=useState("");
- const [newPassword,setNewPassword]=useState("");
- const [showPassword,setShowPassword]=useState(false);
- const [code,setCode]=useState("");
- const [sent,setSent]=useState(false);
+ const [otpDigits,setOtpDigits]=useState<string[]>(["","","","","",""]);
  const [authBusy,setAuthBusy]=useState(false);
- const [authMessage,setAuthMessage]=useState("");
- const [authSuccessMessage,setAuthSuccessMessage]=useState("");
- const [showPasswordModal,setShowPasswordModal]=useState(false);
- const [passwordToast,setPasswordToast]=useState("");
+ const [authError,setAuthError]=useState("");
+ const [authSuccess,setAuthSuccess]=useState("");
+ const [cooldown,setCooldown]=useState(0);
+ const digitRefs=useRef<(HTMLInputElement|null)[]>([]);
  const [active,setActive]=useState<ViewKey>("דשבורד"),[mobileNav,setMobileNav]=useState(false),[filter,setFilter]=useState<PosFilter>("הכול"),[assetFilter,setAssetFilter]=useState<AssetFilter>("הכול"),[hideDust,setHideDust]=useState(true),[selected,setSelected]=useState<Row|null>(null);
  const [summary,setSummary]=useState<Row|null>(null),[snapshot,setSnapshot]=useState<Row|null>(null),[accountSummary,setAccountSummary]=useState<Row|null>(null),[accountAssets,setAccountAssets]=useState<Row[]>([]),[positions,setPositions]=useState<Row[]>([]),[trades,setTrades]=useState<Row[]>([]),[bots,setBots]=useState<Row[]>([]),[runs,setRuns]=useState<Row[]>([]),[strategies,setStrategies]=useState<Row[]>([]),[strategiesV2,setStrategiesV2]=useState<Row[]>([]),[riskEvents,setRiskEvents]=useState<Row[]>([]);
  const [loading,setLoading]=useState(false),[loaded,setLoaded]=useState(false),[errors,setErrors]=useState<Record<string,boolean>>({}),[updatedAt,setUpdatedAt]=useState<Date|null>(null),[clock,setClock]=useState(Date.now());
  const botsRef=useRef<Row[]>([]),positionSummaryRef=useRef<Row|null>(null);
+
+ useEffect(()=>{
+  if(cooldown<=0)return;
+  const timer=window.setInterval(()=>setCooldown(c=>c>0?c-1:0),1000);
+  return()=>clearInterval(timer);
+ },[cooldown]);
+
  useEffect(()=>{
   let alive=true;
-  if(typeof window!=="undefined"&&window.location.hash){
-   const hash=window.location.hash.replace(/^#/,"");
-   const params=new URLSearchParams(hash);
-   const accessToken=params.get("access_token");
-   const refreshToken=params.get("refresh_token");
-   if(accessToken){
-    setAuthBusy(true);
-    supabase.auth.setSession({
-     access_token:accessToken,
-     refresh_token:refreshToken||""
-    }).then(({data,error})=>{
-     if(alive){
-      setAuthBusy(false);
-      if(!error&&data.user){
-       setUser(data.user);
-       setAuthReady(true);
-       window.history.replaceState(null,"",window.location.pathname);
-       setPasswordToast("✓ התחברת בהצלחה למערכת! באפשרותך לקבוע סיסמה קבועה כדי להיכנס תמיד ישירות.");
-       return;
-      }
-     }
-    });
-   }
-  }
   supabase.auth.getUser().then(({data})=>{if(alive){setUser(data.user);setAuthReady(true)}});
   const {data}=supabase.auth.onAuthStateChange((_e,s)=>{if(alive){setUser(s?.user??null);setAuthReady(true)}});
   return()=>{alive=false;data.subscription.unsubscribe()};
@@ -147,134 +126,114 @@ export default function Home(){
  },[user,markSuccess,setSourceError,strategies.length,strategiesV2.length]);
  const loadData=useCallback(async()=>{if(!user)return;setLoading(true);try{await loadFast();await Promise.all([loadMedium(),loadSlow()])}finally{setLoading(false)}},[user,loadFast,loadMedium,loadSlow]);
  useEffect(()=>{if(!user)return;void loadData();const fast=window.setInterval(()=>void loadFast(),5000),medium=window.setInterval(()=>void loadMedium(),10000),slow=window.setInterval(()=>void loadSlow(),15000),ticker=window.setInterval(()=>setClock(Date.now()),1000);const refreshAll=()=>void loadData();const onVisibility=()=>{if(document.visibilityState==="visible")void loadFast()};window.addEventListener("focus",refreshAll);window.addEventListener("online",refreshAll);document.addEventListener("visibilitychange",onVisibility);return()=>{clearInterval(fast);clearInterval(medium);clearInterval(slow);clearInterval(ticker);window.removeEventListener("focus",refreshAll);window.removeEventListener("online",refreshAll);document.removeEventListener("visibilitychange",onVisibility)}},[user,loadData,loadFast,loadMedium,loadSlow]);
- const handlePasswordLogin=async(e?:React.FormEvent)=>{
+ const handleSendCode=async(e?:React.FormEvent)=>{
   if(e)e.preventDefault();
-  if(!email.trim()||!password)return;
-  setAuthBusy(true);setAuthMessage("");setAuthSuccessMessage("");
-  const {data,error}=await supabase.auth.signInWithPassword({
-   email:email.trim(),
-   password:password
-  });
-  setAuthBusy(false);
-  if(error){
-   const msg=error.message||"";
-   if(msg.includes("Invalid login credentials")||msg.includes("invalid_credentials")){
-    setAuthMessage("סיסמה שגויה או שטרם הוגדרה סיסמה לחשבון זה. אם טרם הגדרת סיסמה, עבור ללשונית 'קוד חד־פעמי / קביעת סיסמה'.");
-   }else{
-    setAuthMessage(msg);
-   }
-  }else if(data.user){
-   setUser(data.user);
-  }
- };
- const sendCode=async()=>{
-  if(!email.trim())return;
-  setAuthBusy(true);setAuthMessage("");setAuthSuccessMessage("");
-  const redirectTo=typeof window!=="undefined"?(window.location.hostname==="localhost"||window.location.hostname==="127.0.0.1"?"http://localhost:3000":window.location.origin):undefined;
+  const cleanEmail=email.trim();
+  if(!cleanEmail)return;
+  setAuthBusy(true);setAuthError("");setAuthSuccess("");
   const {error}=await supabase.auth.signInWithOtp({
-   email:email.trim(),
-   options:{shouldCreateUser:true,emailRedirectTo:redirectTo}
+   email:cleanEmail,
+   options:{shouldCreateUser:false}
   });
   setAuthBusy(false);
   if(error){
    const err=error as {status?:number;code?:string;message?:string};
    if(err.status===429||err.code==="over_email_send_rate_limit"||err.message?.includes("rate_limit")){
-    setAuthMessage("נשלחו מספר בקשות לאחרונה. המתן כ־60 שניות או הזן את הקוד שכבר נשלח למייל שלך.");
+    setAuthError("נשלחו בקשות רבות מדי לאחרונה. אנא המתן כדקה לפני שליחה נוספת.");
+   }else if(err.status===422||err.code==="otp_disabled"){
+    setAuthError("כתובת מייל זו אינה מורשית במערכת אישית זו.");
    }else{
-    setAuthMessage(error.message||"לא הצלחנו לשלוח קוד. בדוק את כתובת המייל ונסה שוב.");
+    setAuthError(error.message||"שגיאה בשליחת קוד אימות. נסה שוב בעוד מספר רגעים.");
    }
-  }else{
-   setSent(true);
-   setAuthSuccessMessage("קוד חד־פעמי נשלח למייל שלך. בדוק את תיבת הדואר (כולל תיקיית ספאם).");
-  }
- };
- const verifyCode=async()=>{
-  setAuthBusy(true);setAuthMessage("");setAuthSuccessMessage("");
-  const input=code.trim();
-  if(!input){setAuthBusy(false);return;}
-
-  const applyNewPassword=async()=>{
-   if(newPassword.trim()){
-    const {error:pwdErr}=await supabase.auth.updateUser({password:newPassword.trim()});
-    if(!pwdErr){
-     setPasswordToast("✓ סיסמת המספרים נקבעה בהצלחה! מעתה תוכל להתחבר ישירות עם המייל וסיסמת המספרים שלך.");
-    }
-   }
-  };
-
-  // 1. URL contains access_token
-  if(input.includes("access_token=")){
-   const match=input.match(/access_token=([^&]+)/),refreshMatch=input.match(/refresh_token=([^&]+)/);
-   if(match){
-    const {data,error}=await supabase.auth.setSession({
-     access_token:decodeURIComponent(match[1]),
-     refresh_token:refreshMatch?decodeURIComponent(refreshMatch[1]):""
-    });
-    if(error){
-     setAuthBusy(false);
-     setAuthMessage("הטוקן או הקישור פג תוקף. נסה להעתיק שוב או לשלוח מייל חדש.");
-     return;
-    }
-    await applyNewPassword();
-    setAuthBusy(false);
-    if(data.user)setUser(data.user);
-    return;
-   }
-  }
-
-  // 2. HTTP/HTTPS URL from email button or redirect
-  if(input.startsWith("http://")||input.startsWith("https://")){
-   try{
-    const res=await fetch("/api/auth/resolve",{
-     method:"POST",
-     headers:{"Content-Type":"application/json"},
-     body:JSON.stringify({url:input})
-    });
-    const json=await res.json();
-    if(json.ok&&json.access_token){
-     const {data,error}=await supabase.auth.setSession({
-      access_token:json.access_token,
-      refresh_token:json.refresh_token||""
-     });
-     if(!error&&data.user){
-      await applyNewPassword();
-      setAuthBusy(false);
-      setUser(data.user);
-      return;
-     }
-    }
-   }catch(err){
-    console.error("Resolve error:",err);
-   }
-  }
-
-  // 3. Fallback to OTP token or 6-digit number
-  const tokenParam=input.match(/[?&]token=([^&#]+)/);
-  const cleanToken=tokenParam?tokenParam[1]:input;
-  const {data,error}=await supabase.auth.verifyOtp({email:email.trim(),token:cleanToken,type:"email"});
-  if(error){
-   setAuthBusy(false);
-   setAuthMessage("לא הצלחנו לאמת. ודא שהעתקת את כתובת הקישור מהכפתור במייל (קליק ימני על הכפתור -> העתק כתובת קישור).");
    return;
   }
-  await applyNewPassword();
-  setAuthBusy(false);
-  if(data.user)setUser(data.user);
+  setStep("otp");
+  setOtpDigits(["","","","","",""]);
+  setCooldown(60);
+  setAuthSuccess("קוד אימות בן 6 ספרות נשלח למייל שלך.");
+  setTimeout(()=>digitRefs.current[0]?.focus(),50);
  };
- const updateAccountPassword=async()=>{
-  if(!newPassword.trim()||newPassword.length<6){
-   setAuthMessage("הסיסמה חייבת להכיל לפחות 6 תווים.");
+
+ const handleOtpChange=(index:number,value:string)=>{
+  const cleaned=value.replace(/[^0-9]/g,"");
+  if(!cleaned){
+   const next=[...otpDigits];
+   next[index]="";
+   setOtpDigits(next);
    return;
   }
-  setAuthBusy(true);setAuthMessage("");
-  const {error}=await supabase.auth.updateUser({password:newPassword.trim()});
+  const char=cleaned.slice(-1);
+  const next=[...otpDigits];
+  next[index]=char;
+  setOtpDigits(next);
+  setAuthError("");
+  if(index<5&&char){
+   digitRefs.current[index+1]?.focus();
+  }
+ };
+
+ const handleOtpKeyDown=(index:number,e:React.KeyboardEvent<HTMLInputElement>)=>{
+  if(e.key==="Backspace"){
+   if(!otpDigits[index]&&index>0){
+    digitRefs.current[index-1]?.focus();
+    const next=[...otpDigits];
+    next[index-1]="";
+    setOtpDigits(next);
+   }
+  }else if(e.key==="ArrowLeft"){
+   if(index>0)digitRefs.current[index-1]?.focus();
+  }else if(e.key==="ArrowRight"){
+   if(index<5)digitRefs.current[index+1]?.focus();
+  }else if(e.key==="Enter"){
+   if(otpDigits.every(d=>/^[0-9]$/.test(d))){
+    e.preventDefault();
+    void handleVerifyOtp();
+   }
+  }
+ };
+
+ const handleOtpPaste=(e:React.ClipboardEvent<HTMLInputElement>)=>{
+  e.preventDefault();
+  const pasted=e.clipboardData.getData("text");
+  const digits=pasted.replace(/[^0-9]/g,"").slice(0,6).split("");
+  if(!digits.length)return;
+  const next=["","","","","",""];
+  digits.forEach((d,i)=>{if(i<6)next[i]=d});
+  setOtpDigits(next);
+  setAuthError("");
+  if(digits.length<6){
+   digitRefs.current[digits.length]?.focus();
+  }else{
+   digitRefs.current[5]?.focus();
+  }
+ };
+
+ const handleVerifyOtp=async(e?:React.FormEvent)=>{
+  if(e)e.preventDefault();
+  const cleanEmail=email.trim();
+  const code=otpDigits.join("");
+  if(!cleanEmail||code.length!==6||!/^[0-9]{6}$/.test(code)){
+   setAuthError("יש להזין קוד אימות מלא בן 6 ספרות.");
+   return;
+  }
+  setAuthBusy(true);setAuthError("");setAuthSuccess("");
+  const {data,error}=await supabase.auth.verifyOtp({
+   email:cleanEmail,
+   token:code,
+   type:"email"
+  });
   setAuthBusy(false);
   if(error){
-   setAuthMessage(error.message);
-  }else{
-   setShowPasswordModal(false);
-   setNewPassword("");
-   setPasswordToast("✓ הסיסמה הקבועה עודכנה בהצלחה! מעתה תוכל להיכנס מכל מכשיר בעזרת סיסמה זו.");
+   const err=error as {status?:number;code?:string;message?:string};
+   if(err.status===403||err.code==="otp_expired"||err.message?.includes("expired")){
+    setAuthError("קוד האימות שגוי או שפג תוקפו. אנא בדוק שוב או לחץ על 'שלח קוד חדש'.");
+   }else{
+    setAuthError(error.message||"אימות הקוד נכשל. אנא נסה שוב.");
+   }
+   return;
+  }
+  if(data.user){
+   setUser(data.user);
   }
  };
  const demoBots=useMemo(()=>bots.filter(b=>txt(b.environment,"").toLowerCase().includes("demo")),[bots]);
@@ -294,7 +253,7 @@ export default function Home(){
  const dashboardCards=useMemo(()=>[["שווי החשבון",pick(summary,"account_equity_usdt"),"usd"],["USDT זמין",pick(summary,"available_balance_usdt"),"usd"],["חשיפה פתוחה",pick(summary,"open_exposure_usdt"),"usd"],["רווח/הפסד ממומש",pick(summary,"realized_today"),"usd"],["רווח/הפסד לא ממומש",pick(summary,"unrealized_pnl"),"usd"],["הון ייחוס",pick(summary,"reference_capital_usdt"),"usd"],["ספירת פוזיציות",pick(summary,"open_positions"),"num"]] as const,[summary]);
  const shownPositions=positions.filter(p=>{const pnl=num(p.unrealized_pnl);if(filter==="הכול")return true;if(filter==="Spot"||filter==="Futures")return market(p)===filter;if(filter==="Long"||filter==="Short")return side(p)===filter;if(filter==="רווח")return pnl!==null&&pnl>0;if(filter==="הפסד")return pnl!==null&&pnl<0;return protection(p)==="native_verified"});
  if(!authReady)return <main className="login-shell"><div className="auth-loading"><div className="brand-glyph">C</div><strong>פותח סביבת מסחר מאובטחת…</strong></div></main>;
-   if(!user)return <main className="login-shell" dir="rtl"><section className="login-stage"><div className="login-story"><div className="product-lockup"><div className="brand-glyph">C</div><div><strong>CRYPTO MARKET MONITOR</strong><span>TRADING OS</span></div></div><div className="login-copy"><span className="demo-pill">● סביבת Demo מאובטחת</span><h1>Crypto Market Monitor<br/><em>Trading OS</em></h1><h2>מערכת המסחר האלגוריתמית האישית</h2><p>גישה פרטית לחשבון, לבוטים, לפוזיציות, לאסטרטגיות ולסיכון.</p></div><div className="security-line"><span>◈</span><div><strong>פרטי. מאובטח. מחובר.</strong><small>הנתונים נשמרים תחת החשבון האישי שלך בלבד.</small></div></div></div><div className="login-panel"><div className="login-panel-head"><span className="login-lock">⌾</span><span className="panel-kicker">כניסה מאובטחת</span><h2>כניסה למערכת</h2><p>בחר את דרך ההתחברות הנוחה עבורך:</p></div><div style={{display:"flex",gap:8,margin:"16px 0 12px"}}><button type="button" style={{flex:1,padding:"10px 8px",borderRadius:9,border:"1px solid "+(authMode==="password"?"#27c9ea":"#1d2d45"),background:authMode==="password"?"rgba(39,201,234,0.15)":"#07111f",color:authMode==="password"?"#fff":"#8da0b9",cursor:"pointer",fontWeight:800,fontSize:13}} onClick={()=>{setAuthMode("password");setAuthMessage("");setAuthSuccessMessage("")}}>🔑 כניסה עם סיסמה (מספרים)</button><button type="button" style={{flex:1,padding:"10px 8px",borderRadius:9,border:"1px solid "+(authMode==="code"?"#27c9ea":"#1d2d45"),background:authMode==="code"?"rgba(39,201,234,0.15)":"#07111f",color:authMode==="code"?"#fff":"#8da0b9",cursor:"pointer",fontWeight:800,fontSize:13}} onClick={()=>{setAuthMode("code");setAuthMessage("");setAuthSuccessMessage("")}}>✉️ קביעת סיסמת מספרים / קישור</button></div>{authMode==="password"?<form onSubmit={handlePasswordLogin} className="login-form"><label>כתובת מייל<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@example.com" required/></label><label>סיסמה (מספרים)<div style={{position:"relative",display:"flex",alignItems:"center"}}><input type={showPassword?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="הזן את סיסמת המספרים שלך" required style={{paddingLeft:40}}/><button type="button" onClick={()=>setShowPassword(v=>!v)} style={{position:"absolute",left:8,background:"none",border:"none",color:"#8da0b9",cursor:"pointer",padding:4,fontSize:14}} title={showPassword?"הסתר":"הצג"}>{showPassword?"🙈":"👁️"}</button></div></label>{authMessage&&<div className="auth-message" style={{color:"#ff8a9b",borderColor:"rgba(255,138,155,0.3)"}}>{authMessage}</div>}<button type="submit" disabled={authBusy||!email.trim()||!password}>{authBusy?"מתחבר…":"כניסה מיידית למערכת"}</button><button type="button" className="secondary" onClick={()=>{setAuthMode("code");setAuthMessage("")}} style={{cursor:"pointer",marginTop:4}}>טרם הגדרת סיסמת מספרים לחשבון? לחץ כאן לקביעת סיסמה ←</button></form>:<div className="login-form"><div style={{background:"rgba(39,201,234,0.08)",border:"1px solid rgba(39,201,234,0.2)",borderRadius:9,padding:"10px 12px",color:"#c5eef7",fontSize:12,lineHeight:1.5,marginBottom:12}}>💡 <strong>למה אין מספרים במייל?</strong> המייל מסופאבייס מכיל כפתור כניסה בלבד (ללא סיסמה).<br/>להגדרת סיסמת מספרים קבועה: העתק את הקישור מהכפתור במייל, הדבק כאן ובחר סיסמה.</div><label>כתובת מייל<input type="email" value={email} onChange={e=>setEmail(e.target.value)} disabled={sent} placeholder="name@example.com"/></label>{sent&&<><label>הדבק את הקישור מהמייל או שורת הכתובות<input className="otp" value={code} onChange={e=>setCode(e.target.value)} placeholder="קליק ימני על הכפתור במייל -> העתק קישור -> הדבק כאן" autoFocus/></label><label>בחר את סיסמת המספרים הקבועה שלך (חובה)<input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="למשל 123456 או כל רצף מספרים (לפחות 6 ספרות)"/><small style={{color:"#8da0b9",fontSize:11}}>לאחר שמירה זו, לעולם לא תצטרך מיילים — תיכנס תמיד ישירות עם המספרים הללו.</small></label></>}{authMessage&&<div className="auth-message" style={{color:"#ff8a9b",borderColor:"rgba(255,138,155,0.3)"}}>{authMessage}</div>}{authSuccessMessage&&<div className="auth-message" style={{color:"#52efb7",borderColor:"rgba(82,239,183,0.3)"}}>{authSuccessMessage}</div>}<button type="button" disabled={authBusy||!email.trim()||(sent&&!code.trim())} onClick={sent?verifyCode:sendCode}>{authBusy?"ממתין…":sent?"שמור סיסמת מספרים וכנס למערכת":"שליחת מייל עם כפתור קישור"}</button>{sent?<button type="button" className="secondary" onClick={()=>{setSent(false);setCode("");setAuthMessage("");setAuthSuccessMessage("")}}>שליחה מחדש של מייל</button>:<button type="button" className="secondary" onClick={()=>setSent(true)}>יש לי כבר את המייל שנשלח</button>}<button type="button" className="secondary" onClick={()=>{setAuthMode("password");setAuthMessage("")}} style={{cursor:"pointer",marginTop:2}}>חזרה לכניסה ישירה עם סיסמה →</button></div>}<div className="live-locked"><span>LIVE</span><strong>מצב Live נעול</strong><small>המערכת פעילה בסביבת Demo בלבד</small></div></div></section></main>;
+ if(!user)return <main className="login-shell" dir="rtl"><section className="login-stage"><div className="login-story"><div className="product-lockup"><div className="brand-glyph">C</div><div><strong>CRYPTO MARKET MONITOR</strong><span>TRADING OS</span></div></div><div className="login-copy"><span className="demo-pill">● סביבת Demo מאובטחת</span><h1>Crypto Market Monitor<br/><em>Trading OS</em></h1><h2>מערכת המסחר האלגוריתמית האישית</h2><p>גישה פרטית לחשבון, לבוטים, לפוזיציות, לאסטרטגיות ולסיכון.</p></div><div className="security-line"><span>◈</span><div><strong>פרטי. מאובטח. מחובר.</strong><small>הנתונים נשמרים תחת החשבון האישי שלך בלבד.</small></div></div></div><div className="login-panel"><div className="login-panel-head"><span className="login-lock">⌾</span><span className="panel-kicker">כניסה מאובטחת</span>{step==="email"?<><h2>כניסה ל-CryptoBot Control Center</h2><p>הזן כתובת מייל לקבלת קוד אימות חד־פעמי בן 6 ספרות:</p></>:<><h2>הזן קוד אימות</h2><p>שלחנו קוד בן 6 ספרות אל: <strong dir="ltr" style={{color:"var(--cyan)",fontWeight:800}}>{email}</strong></p></>}</div>{authError&&<div className="auth-message" style={{color:"#ff8a9b",borderColor:"rgba(255,138,155,0.35)",background:"rgba(255,138,155,0.08)",marginTop:14}}>{authError}</div>}{authSuccess&&!authError&&<div className="auth-message" style={{color:"#52efb7",borderColor:"rgba(82,239,183,0.35)",background:"rgba(82,239,183,0.08)",marginTop:14}}>{authSuccess}</div>}{step==="email"?<form onSubmit={handleSendCode} className="login-form"><label>כתובת מייל<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@example.com" autoComplete="email" required disabled={authBusy} autoFocus/></label><button type="submit" disabled={authBusy||!email.trim()} style={{marginTop:6}}>{authBusy?"שולח קוד…":"שלח קוד"}</button></form>:<form onSubmit={handleVerifyOtp} className="login-form"><div style={{marginTop:8}}><label style={{textAlign:"center",marginBottom:10,color:"#b9c8d9",fontSize:13}}>הזן את הקוד שנשלח למייל:</label><div className="otp-boxes" style={{display:"flex",gap:8,justifyContent:"center",direction:"ltr",margin:"12px 0 16px"}}>{otpDigits.map((digit,idx)=><input key={idx} ref={el=>{digitRefs.current[idx]=el}} type="text" inputMode="numeric" pattern="[0-9]*" maxLength={1} autoComplete={idx===0?"one-time-code":"off"} value={digit} onChange={e=>handleOtpChange(idx,e.target.value)} onKeyDown={e=>handleOtpKeyDown(idx,e)} onPaste={handleOtpPaste} disabled={authBusy} aria-label={`ספרה ${idx+1} מתוך 6`} style={{width:44,height:52,textAlign:"center",fontSize:22,fontWeight:800,borderRadius:10,border:"1px solid "+(digit?"#27c9ea":"#1d2d45"),background:digit?"rgba(39,201,234,0.08)":"#07111f",color:"#fff",transition:"border-color .15s, box-shadow .15s"}}/>)}</div></div><button type="submit" disabled={authBusy||!otpDigits.every(d=>/^[0-9]$/.test(d))}>{authBusy?"מאמת קוד…":"אימות וכניסה"}</button><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8,gap:10}}><button type="button" className="secondary" disabled={authBusy||cooldown>0} onClick={()=>void handleSendCode()} style={{cursor:cooldown>0?"not-allowed":"pointer",fontSize:12,padding:"8px 0",opacity:cooldown>0?0.6:1}}>{cooldown>0?`שלח שוב בעוד ${cooldown} שניות`:"שלח קוד חדש"}</button><button type="button" className="secondary" disabled={authBusy} onClick={()=>{setStep("email");setAuthError("");setAuthSuccess("")}} style={{cursor:"pointer",fontSize:12,padding:"8px 0"}}>שינוי כתובת מייל ←</button></div></form>}<div className="live-locked"><span>LIVE</span><strong>מצב Live נעול</strong><small>המערכת פעילה בסביבת Demo בלבד</small></div></div></section></main>;
 
  const Status=({label,value}:{label:string;value:unknown})=><div><span>{label}</span><strong dir="ltr">{txt(value)}</strong></div>;
  const AccountBreakdown=()=>{const account=(snapshot?.account&&typeof snapshot.account==="object"?snapshot.account:{}) as Row,assets=Array.isArray(snapshot?.assets)?snapshot.assets as Row[]:[],managed=new Set(positions.filter(p=>market(p)==="Spot").map(p=>txt(p.symbol,"").replace(/USDT$/i,"")));return <section className="panel account-panel"><div className="section-head"><div><span className="kicker">מקור אמת: Bybit Demo</span><h2>פירוט חשבון Bybit Demo</h2><p>פירוט מסביר בלבד — שווי החשבון אינו מחושב מחדש מרכיבים אלה</p></div><span className={`record-count ${bool(snapshot?.stale)?"snapshot-stale":""}`}>{bool(snapshot?.stale)?"הנתון האחרון שהתקבל":"Snapshot חי"}</span></div><div className="account-grid">{[["שווי חשבון כולל",account.total_equity,"usd"],["יתרה זמינה",account.total_available_balance,"usd"],["USDT Equity",assets.find(a=>txt(a.coin)==="USDT")?.equity,"usd"],["Spot Assets",assets.filter(a=>txt(a.coin)!=="USDT").length,"num"],["Futures Unrealized PnL",account.total_perp_upl,"usd"],["Initial Margin",account.total_initial_margin,"usd"],["Maintenance Margin",account.total_maintenance_margin,"usd"],["פקודות Spot פתוחות",snapshot?.spot_open_orders,"num"],["פקודות Futures פתוחות",snapshot?.linear_open_orders,"num"],["זמן המדידה",when(snapshot?.checked_at),"text"]].map(([label,value,kind])=><article key={String(label)}><span>{String(label)}</span>{kind==="text"?<strong dir="ltr">{txt(value)}</strong>:<Value value={value} kind={kind as "usd"|"num"}/>}</article>)}</div><div className="asset-table"><div className="asset-head"><span>מטבע</span><span>כמות</span><span>שווי בדולרים</span><span>נעול</span><span>סיווג</span></div>{assets.map((asset,i)=>{const coin=txt(asset.coin),value=num(asset.usd_value)??0,label=managed.has(coin)?"מנוהל על ידי הבוט":Math.abs(value)>1?"נכס נוסף בחשבון":"שארית קטנה";return <article key={`${coin}-${i}`}><strong dir="ltr">{coin}</strong><span dir="ltr">{dec(asset.wallet_balance,10)}</span><span dir="ltr">{usd(asset.usd_value)}</span><span dir="ltr">{dec(asset.locked,10)}</span><em>{label}</em></article>})}{!assets.length&&<Empty>אין עדיין נתוני נכסים זמינים</Empty>}</div></section>};
@@ -326,5 +285,5 @@ export default function Home(){
  let body:React.ReactNode;if(active==="דשבורד")body=<>{loading&&!loaded?<Skeleton/>:errors.dashboard?<div className="data-alert">נתוני הדשבורד אינם זמינים כרגע</div>:<section className="metric-grid">{dashboardCards.map(([l,v,k])=><article key={l}><span>{l}</span><Value value={v} kind={k as "usd"|"num"} tone={l.includes("רווח/הפסד")}/><small>{l==="שווי החשבון"&&snapshot?.checked_at?`נמדד ב־Bybit לפני ${Math.max(0,Math.floor((clock-new Date(String(snapshot.checked_at)).getTime())/1000))} שניות`:v===null?"לא התקבל נתון":"נתון חי"}</small></article>)}</section>}<EngineSummary/><PositionList/></>;else if(active==="חשבון Bybit")body=<BybitAccount/>;else if(active==="פוזיציות")body=<PositionList/>;else if(active==="עסקאות")body=<Trades/>;else if(active==="ביצועים")body=<Performance/>;else if(active==="אסטרטגיות")body=<Strategies/>;else if(active==="סיכונים")body=<Risks/>;else if(active==="מוכנות ל־Live")body=<LiveReadiness/>;else body=<System/>;
  const reward=selected?positionReward(selected):null,risk=selected?positionRisk(selected):null,rr=reward!==null&&risk!==null&&risk>0?reward/risk:null,selectedPnl=selected?num(selected.unrealized_pnl):null,selectedNotional=selected?num(selected.notional_usdt):null;
  const snapshotAge=snapshot?.checked_at?Math.max(0,Math.floor((clock-new Date(String(snapshot.checked_at)).getTime())/1000)):null,lastSnapshotError=txt(snapshot?.last_error,"").trim(),bybitLabel=lastSnapshotError?"שגיאה בחיבור ל־Bybit Demo":snapshotAge===null?"ממתין לנתוני Bybit Demo":snapshotAge<=15?"Bybit Demo מחובר":snapshotAge<=60?"נתוני Bybit מתעכבים":"נתוני Bybit אינם עדכניים",bybitWarning=!!lastSnapshotError||snapshotAge===null||snapshotAge>15,delayState=lastSnapshotError||snapshotAge!==null&&snapshotAge>60?"stale":snapshotAge!==null&&snapshotAge>15?"delayed":snapshotAge===null?"waiting":"fresh";
-  return <main className="trading-shell" dir="rtl"><aside className={mobileNav?"sidebar open":"sidebar"}><div className="side-brand"><div className="brand-glyph">C</div><div><strong>CRYPTO MARKET</strong><span>TRADING OS</span></div></div><nav>{nav.map((n,i)=><button key={n} className={active===n?"active":""} onClick={()=>{setActive(n);setMobileNav(false)}}><span>{icons[i]}</span>{n}{n==="מוכנות ל־Live"&&<i>🔒</i>}</button>)}</nav><div className="side-footer"><span className="demo-dot">●</span><div><strong>DEMO פעיל</strong><small>סביבה מאובטחת</small></div></div></aside><section className="workspace"><header className="topbar"><button className="menu-button" onClick={()=>setMobileNav(v=>!v)}>☰</button><div><span className="kicker">מסחר אלגוריתמי אישי</span><h1>Crypto Market Monitor <em>— Trading OS</em></h1><p>מערכת המסחר האלגוריתמית האישית</p></div><div className="top-actions"><button className={`refresh ${loading?"refreshing":""}`} onClick={()=>void loadData()} disabled={loading}><span>↻</span> {loading?"מעדכן…":"רענון נתונים"}</button><button type="button" onClick={()=>{setShowPasswordModal(true);setAuthMessage("")}} style={{display:"flex",alignItems:"center",gap:6,border:"1px solid #1f3f59",background:"#081726",color:"#5ce0f5",borderRadius:9,padding:"7px 11px",fontSize:12,fontWeight:800,cursor:"pointer"}} title="הגדרת סיסמה קבועה"><span>🔑</span> סיסמה קבועה</button><div className="mode-switch"><b>DEMO</b><span>LIVE 🔒</span></div><button className="user-button" onClick={()=>void supabase.auth.signOut()} title="יציאה"><span>{user.email?.[0]?.toUpperCase()}</span><div><strong>חשבון אישי</strong><small dir="ltr">{user.email}</small></div></button></div></header><div className={`system-strip auto-refresh ${delayState}`}><span><i/> Supabase מחובר</span><span className={bybitWarning?"bybit-warning":""}>{bybitLabel}</span><span>רענון אוטומטי פעיל</span><time><b>רענון האתר: {updatedAt?updatedAt.toLocaleTimeString("he-IL"):"ממתין…"}</b><small>Snapshot Bybit: {snapshot?.checked_at?when(snapshot.checked_at):"טרם התקבל"}</small></time></div>{passwordToast&&<div style={{background:"rgba(73,241,181,0.12)",border:"1px solid rgba(73,241,181,0.35)",borderRadius:10,padding:"11px 16px",color:"#79f2c5",margin:"0 0 14px",display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,fontWeight:700}}><span>{passwordToast}</span><button onClick={()=>setPasswordToast("")} style={{background:"none",border:"none",color:"#79f2c5",cursor:"pointer",fontSize:18,lineHeight:1}}>×</button></div>}{body}<footer>Crypto Market Monitor — Trading OS <span>סביבת Demo · תצוגה בלבד</span></footer></section>{selected&&<div className="drawer-backdrop" onClick={()=>setSelected(null)}><aside className="position-drawer" onClick={e=>e.stopPropagation()}><button className="drawer-close" onClick={()=>setSelected(null)} aria-label="סגירת פירוט">×</button><span className="kicker">פירוט פוזיציה · קריאה בלבד</span><h2 dir="ltr">{txt(selected.symbol)}</h2><div className="badges"><Badge kind={market(selected)}>{marketLabel(market(selected))}</Badge><Badge kind={side(selected)}>{sideLabel(side(selected))}</Badge></div><dl>{[["אסטרטגיה",strategyLabel(strategyKey(selected))],["סכום העסקה",usd(selected.notional_usdt)],["כמות",dec(selected.qty,10)],["מחיר כניסה",price(selected.entry_price)],["מחיר נוכחי",price(selected.current_price)],["PnL בדולרים",usd(selected.unrealized_pnl)],["PnL באחוזים",selectedPnl!==null&&selectedNotional?pct(selectedPnl/selectedNotional*100):"לא זמין"],["Stop Loss",price(selected.stop_loss_price)],["Take Profit",price(selected.take_profit_price)],["סיכון עד Stop Loss",usd(risk)],["רווח אפשרי עד Take Profit",usd(reward)],["יחס סיכון־סיכוי",rr===null?"לא זמין":`${dec(rr)} : 1`],["מצב ההגנה",protectionLabel(selected)],["זמן פתיחה",when(selected.opened_at)],["עדכון אחרון",when(selected.updated_at)],["שוק Snapshot",marketLabel(market({...selected,market:selected.snapshot_market??selected.market}))],["Snapshot מ־Bybit",when(selected.snapshot_checked_at)]].map(([l,v])=><div key={String(l)}><dt>{l}</dt><dd dir="ltr">{txt(v)}</dd></div>)}</dl><small className="drawer-note">הערכה לפני עמלות, החלקה ופערי מחיר</small></aside></div>}{showPasswordModal&&<div className="drawer-backdrop" onClick={()=>setShowPasswordModal(false)}><div className="panel" onClick={e=>e.stopPropagation()} style={{maxWidth:440,margin:"18vh auto",padding:24,position:"relative",boxShadow:"0 20px 60px rgba(0,0,0,0.7)",direction:"rtl"}}><button className="drawer-close" onClick={()=>setShowPasswordModal(false)} aria-label="סגירה" style={{position:"absolute",left:16,top:16}}>×</button><span className="kicker">אבטחה וכניסה מהירה</span><h2 style={{margin:"6px 0 10px",fontSize:20}}>הגדרת סיסמה קבועה לחשבון</h2><p style={{color:"#8da0b9",fontSize:13,lineHeight:1.6}}>קבע סיסמה אישית כדי שתוכל להיכנס למערכת מכל מכשיר ישירות, ללא צורך בקוד למייל.</p><div className="login-form" style={{marginTop:16}}><label>סיסמה חדשה (לפחות 6 תווים)<input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="הזן סיסמה חדשה" autoFocus/></label>{authMessage&&<div className="auth-message" style={{color:"#ff8a9b"}}>{authMessage}</div>}<button type="button" disabled={authBusy||newPassword.length<6} onClick={updateAccountPassword}>{authBusy?"מעדכן…":"שמירת סיסמה קבועה"}</button></div></div></div>}</main>;
+   return <main className="trading-shell" dir="rtl"><aside className={mobileNav?"sidebar open":"sidebar"}><div className="side-brand"><div className="brand-glyph">C</div><div><strong>CRYPTO MARKET</strong><span>TRADING OS</span></div></div><nav>{nav.map((n,i)=><button key={n} className={active===n?"active":""} onClick={()=>{setActive(n);setMobileNav(false)}}><span>{icons[i]}</span>{n}{n==="מוכנות ל־Live"&&<i>🔒</i>}</button>)}</nav><div className="side-footer"><span className="demo-dot">●</span><div><strong>DEMO פעיל</strong><small>סביבה מאובטחת</small></div></div></aside><section className="workspace"><header className="topbar"><button className="menu-button" onClick={()=>setMobileNav(v=>!v)}>☰</button><div><span className="kicker">מסחר אלגוריתמי אישי</span><h1>Crypto Market Monitor <em>— Trading OS</em></h1><p>מערכת המסחר האלגוריתמית האישית</p></div><div className="top-actions"><button className={`refresh ${loading?"refreshing":""}`} onClick={()=>void loadData()} disabled={loading}><span>↻</span> {loading?"מעדכן…":"רענון נתונים"}</button><div className="mode-switch"><b>DEMO</b><span>LIVE 🔒</span></div><button className="user-button" onClick={()=>void supabase.auth.signOut()} title="יציאה"><span>{user.email?.[0]?.toUpperCase()}</span><div><strong>חשבון אישי</strong><small dir="ltr">{user.email}</small></div></button></div></header><div className={`system-strip auto-refresh ${delayState}`}><span><i/> Supabase מחובר</span><span className={bybitWarning?"bybit-warning":""}>{bybitLabel}</span><span>רענון אוטומטי פעיל</span><time><b>רענון האתר: {updatedAt?updatedAt.toLocaleTimeString("he-IL"):"ממתין…"}</b><small>Snapshot Bybit: {snapshot?.checked_at?when(snapshot.checked_at):"טרם התקבל"}</small></time></div>{body}<footer>Crypto Market Monitor — Trading OS <span>סביבת Demo · תצוגה בלבד</span></footer></section>{selected&&<div className="drawer-backdrop" onClick={()=>setSelected(null)}><aside className="position-drawer" onClick={e=>e.stopPropagation()}><button className="drawer-close" onClick={()=>setSelected(null)} aria-label="סגירת פירוט">×</button><span className="kicker">פירוט פוזיציה · קריאה בלבד</span><h2 dir="ltr">{txt(selected.symbol)}</h2><div className="badges"><Badge kind={market(selected)}>{marketLabel(market(selected))}</Badge><Badge kind={side(selected)}>{sideLabel(side(selected))}</Badge></div><dl>{[["אסטרטגיה",strategyLabel(strategyKey(selected))],["סכום העסקה",usd(selected.notional_usdt)],["כמות",dec(selected.qty,10)],["מחיר כניסה",price(selected.entry_price)],["מחיר נוכחי",price(selected.current_price)],["PnL בדולרים",usd(selected.unrealized_pnl)],["PnL באחוזים",selectedPnl!==null&&selectedNotional?pct(selectedPnl/selectedNotional*100):"לא זמין"],["Stop Loss",price(selected.stop_loss_price)],["Take Profit",price(selected.take_profit_price)],["סיכון עד Stop Loss",usd(risk)],["רווח אפשרי עד Take Profit",usd(reward)],["יחס סיכון־סיכוי",rr===null?"לא זמין":`${dec(rr)} : 1`],["מצב ההגנה",protectionLabel(selected)],["זמן פתיחה",when(selected.opened_at)],["עדכון אחרון",when(selected.updated_at)],["שוק Snapshot",marketLabel(market({...selected,market:selected.snapshot_market??selected.market}))],["Snapshot מ־Bybit",when(selected.snapshot_checked_at)]].map(([l,v])=><div key={String(l)}><dt>{l}</dt><dd dir="ltr">{txt(v)}</dd></div>)}</dl><small className="drawer-note">הערכה לפני עמלות, החלקה ופערי מחיר</small></aside></div>}</main>;
 }
