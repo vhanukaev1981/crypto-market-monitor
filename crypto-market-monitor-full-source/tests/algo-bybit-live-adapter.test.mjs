@@ -415,5 +415,87 @@ test('executeCanaryTradeCycle fails closed at each upstream gate', async () => {
   assert.equal(orderPlaced, false);
 });
 
+test('checkBybitLiveReadiness produces redacted PASS report and never calls order endpoints or prints secrets', async () => {
+  const { checkBybitLiveReadiness } = await import('../scripts/check-bybit-live-readiness.mjs');
+  let orderCalls = 0;
+  const secretKey = 'super-secret-bybit-api-key-999';
+  const secretVal = 'ultra-secret-bybit-api-secret-888';
+
+  const mockTransport = {
+    request: async ({ operation }) => {
+      if (operation === 'queryApiPermissions') {
+        return {
+          retCode: 0,
+          result: {
+            readOnly: 0,
+            permissions: { Spot: ['SpotTrade'], Wallet: ['AccountTransfer'] }
+          }
+        };
+      }
+      if (operation === 'accountSnapshot') {
+        return {
+          retCode: 0,
+          result: { list: [{ accountType: 'UNIFIED', coin: [{ coin: 'USDT', walletBalance: '50' }] }] }
+        };
+      }
+      if (operation === 'placeOrder') {
+        orderCalls += 1;
+        throw new Error('Must never call placeOrder in diagnostic');
+      }
+      throw new Error(`Unexpected op: ${operation}`);
+    },
+    placeOrder: async () => {
+      orderCalls += 1;
+      throw new Error('Must never call placeOrder in diagnostic');
+    }
+  };
+
+  const report = await checkBybitLiveReadiness({
+    env: { BYBIT_API_KEY: secretKey, BYBIT_API_SECRET: secretVal },
+    transport: mockTransport
+  });
+
+  assert.equal(report.status, 'PASS');
+  assert.equal(report.orderTransportEngaged, false);
+  assert.equal(report.permissions.withdrawalDisabled, true);
+  assert.equal(report.permissions.spotEnabled, true);
+  assert.equal(report.canaryPolicy.maxOrderNotionalUsdt, 10);
+  assert.equal(report.canaryPolicy.maxCumulativeExposureUsdt, 100);
+  assert.equal(orderCalls, 0);
+
+  const jsonStr = JSON.stringify(report);
+  assert.ok(!jsonStr.includes(secretKey), 'Must not leak apiKey');
+  assert.ok(!jsonStr.includes(secretVal), 'Must not leak apiSecret');
+});
+
+test('checkBybitLiveReadiness fails closed on withdrawal permission or auth failure', async () => {
+  const { checkBybitLiveReadiness } = await import('../scripts/check-bybit-live-readiness.mjs');
+  const secretVal = 'top-secret-val';
+
+  // Withdrawal permission detected
+  const mockTransportWithWithdraw = {
+    request: async ({ operation }) => {
+      if (operation === 'queryApiPermissions') {
+        return {
+          retCode: 0,
+          result: { permissions: { Spot: ['SpotTrade'], Wallet: ['Withdraw'] } }
+        };
+      }
+      return { retCode: 0, result: { list: [{ accountType: 'UNIFIED', coin: [] }] } };
+    }
+  };
+
+  const failReport = await checkBybitLiveReadiness({
+    env: { BYBIT_API_KEY: 'k', BYBIT_API_SECRET: secretVal },
+    transport: mockTransportWithWithdraw
+  });
+
+  assert.equal(failReport.status, 'FAIL');
+  assert.equal(failReport.orderTransportEngaged, false);
+  assert.match(failReport.reason, /WITHDRAWAL_PERMISSION_DETECTED/i);
+  assert.ok(!JSON.stringify(failReport).includes(secretVal));
+});
+
+
 
 
