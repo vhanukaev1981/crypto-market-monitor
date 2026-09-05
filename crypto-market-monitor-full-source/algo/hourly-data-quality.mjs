@@ -7,10 +7,18 @@ function normalize(c) {
   return {t,time:new Date(t).toISOString(),open,high,low,close,volume, ...(c?.synthetic ? {synthetic:true} : {})};
 }
 
+function validateHourlyValues(rows) {
+  if (rows.some(row=>[row.open,row.high,row.low,row.close].some(v=>v<=0))) throw new Error('INVALID_HOURLY_PRICE');
+  if (rows.some(row=>row.volume<0)) throw new Error('INVALID_HOURLY_VOLUME');
+  if (rows.some(row=>row.high<Math.max(row.open,row.close) || row.low>Math.min(row.open,row.close) || row.high<row.low)) throw new Error('INVALID_HOURLY_OHLC');
+}
+
 export function repairMinorHourlyGaps(candles,{maxGapHours=3}={}) {
   if (!Array.isArray(candles) || candles.length===0) return {candles:[],gapsFilled:0,gapEvents:[]};
   if (!Number.isInteger(maxGapHours) || maxGapHours < 0) throw new Error('INVALID_MAX_GAP_HOURS');
   const rows=candles.map(normalize);
+  if (rows.some(row=>row.t%HOUR_MS!==0)) throw new Error('MISALIGNED_HOURLY_DATA');
+  validateHourlyValues(rows);
   const out=[(({t,...rest})=>rest)(rows[0])];
   let gapsFilled=0;
   const gapEvents=[];
@@ -40,9 +48,7 @@ export function validateStrictHourlyCandles(candles,{expectedStartTime=null,expe
   if (candles.length===0) throw new Error('EMPTY_HOURLY_DATA');
   const rows=candles.map(normalize);
   if (rows.some(row=>row.synthetic)) throw new Error('SYNTHETIC_CANDLE_NOT_ALLOWED');
-  if (rows.some(row=>[row.open,row.high,row.low,row.close].some(v=>v<=0))) throw new Error('INVALID_HOURLY_PRICE');
-  if (rows.some(row=>row.volume<0)) throw new Error('INVALID_HOURLY_VOLUME');
-  if (rows.some(row=>row.high<Math.max(row.open,row.close) || row.low>Math.min(row.open,row.close) || row.high<row.low)) throw new Error('INVALID_HOURLY_OHLC');
+  validateHourlyValues(rows);
   if (rows.some(row=>row.t%HOUR_MS!==0)) throw new Error('MISALIGNED_HOURLY_DATA');
   for (let i=1;i<rows.length;i++) {
     const diff=rows[i].t-rows[i-1].t;
