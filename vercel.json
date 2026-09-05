@@ -1,0 +1,7 @@
+﻿{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "installCommand": "cd crypto-market-monitor-full-source && npm install",
+  "buildCommand": "cd crypto-market-monitor-full-source && npx next build",
+  "outputDirectory": "crypto-market-monitor-full-source/.next"
+}
