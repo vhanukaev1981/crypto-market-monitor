@@ -1,0 +1,22 @@
+name: ALGO V2 Bybit Order Transport TDD
+
+on:
+  push:
+    branches:
+      - agent/algo-v2-bybit-order-transport
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transport-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+      - name: Run Bybit order transport contract tests (mock only)
+        run: node --test crypto-market-monitor-full-source/tests/algo-bybit-order-transport.test.mjs
