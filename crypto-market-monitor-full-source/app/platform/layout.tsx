@@ -7,6 +7,13 @@ import { createClient, type User } from "@supabase/supabase-js";
 const supabase = createClient(
   "https://xabffbjifmnoogzcttyd.supabase.co",
   "sb_publishable_-0xlsgjpG-xwVfaUGTag4A_wvgxVWwD",
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  }
 );
 
 const shellCss = `
