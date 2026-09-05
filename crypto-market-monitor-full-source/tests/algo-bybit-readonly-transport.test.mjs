@@ -54,14 +54,15 @@ test('signs V5 order create POST with exact JSON body and no secret leakage', as
     apiKey: 'test-key', apiSecret: 'test-secret', now: () => 1700000000000,
     fetchImpl: async (url, options) => { captured = { url, options }; return { ok: true, json: async () => ({ retCode: 0, result: { orderId: 'mock-order-1', orderLinkId: 'canary-1' } }) }; }
   });
-  const order = { category: 'spot', symbol: 'BTCUSDT', side: 'Buy', orderType: 'Market', qty: '5', marketUnit: 'quoteCoin', orderLinkId: 'canary-1' };
-  const result = await transport.request({ operation: 'placeOrder', order });
+  const request = { operation: 'placeOrder', symbol: 'BTCUSDT', side: 'Buy', qty: '5', orderLinkId: 'canary-1' };
+  const expectedOrder = { category: 'spot', symbol: 'BTCUSDT', side: 'Buy', orderType: 'Market', qty: '5', marketUnit: 'quoteCoin', orderLinkId: 'canary-1' };
+  const result = await transport.request(request);
   assert.equal(result.result.orderId, 'mock-order-1');
   assert.equal(captured.url, 'https://api.bybit.com/v5/order/create');
   assert.equal(captured.options.method, 'POST');
   assert.equal(captured.options.headers['Content-Type'], 'application/json');
-  assert.equal(captured.options.body, JSON.stringify(order));
-  const expected = createHmac('sha256', 'test-secret').update(`1700000000000test-key5000${JSON.stringify(order)}`).digest('hex');
+  assert.equal(captured.options.body, JSON.stringify(expectedOrder));
+  const expected = createHmac('sha256', 'test-secret').update(`1700000000000test-key5000${JSON.stringify(expectedOrder)}`).digest('hex');
   assert.equal(captured.options.headers['X-BAPI-SIGN'], expected);
   assert.ok(!JSON.stringify(captured).includes('test-secret'));
 });
