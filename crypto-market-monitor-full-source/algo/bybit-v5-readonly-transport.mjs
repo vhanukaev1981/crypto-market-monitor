@@ -34,10 +34,32 @@ export function createBybitV5ReadOnlyTransport(config = {}) {
     return body;
   }
 
+  async function queryApiPermissions() {
+    const timestamp = String(now());
+    const payload = `${timestamp}${apiKey}${RECV_WINDOW}`;
+    const signature = createHmac('sha256', apiSecret).update(payload).digest('hex');
+    const response = await fetchImpl(`${baseUrl}/v5/user/query-api`, {
+      method: 'GET',
+      headers: {
+        'X-BAPI-API-KEY': apiKey,
+        'X-BAPI-TIMESTAMP': timestamp,
+        'X-BAPI-RECV-WINDOW': RECV_WINDOW,
+        'X-BAPI-SIGN': signature,
+        'X-BAPI-SIGN-TYPE': '2'
+      }
+    });
+    if (!response?.ok) throw new Error(`Bybit HTTP failure: ${response?.status ?? 'unknown'}`);
+    const body = await response.json();
+    if (!body || body.retCode !== 0) throw new Error(`Bybit API failure ${body?.retCode ?? 'unknown'}: ${body?.retMsg ?? 'unknown'}`);
+    return body;
+  }
+
   return Object.freeze({
     async request(request = {}) {
-      if (request.operation !== 'accountSnapshot') throw new Error('Unsupported read-only Bybit operation');
-      return accountSnapshot();
+      if (request.operation === 'accountSnapshot') return accountSnapshot();
+      if (request.operation === 'queryApiPermissions') return queryApiPermissions();
+      throw new Error('Unsupported read-only Bybit operation');
     }
   });
 }
+

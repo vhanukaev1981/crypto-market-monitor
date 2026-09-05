@@ -29,3 +29,21 @@ test('fails closed when Bybit rejects authentication', async () => {
   const transport = createBybitV5ReadOnlyTransport({ apiKey: 'k', apiSecret: 's', fetchImpl: async () => ({ ok: true, json: async () => ({ retCode: 10003, retMsg: 'API key is invalid' }) }) });
   await assert.rejects(() => transport.request({ operation: 'accountSnapshot' }), /Bybit.*10003/i);
 });
+
+test('signs a V5 query-api GET and never sends the secret', async () => {
+  let captured;
+  const transport = createBybitV5ReadOnlyTransport({
+    apiKey: 'test-key', apiSecret: 'test-secret', now: () => 1700000000000,
+    fetchImpl: async (url, options) => { captured = { url, options }; return { ok: true, json: async () => ({ retCode: 0, result: { permissions: {} } }) }; }
+  });
+  const result = await transport.request({ operation: 'queryApiPermissions' });
+  assert.equal(result.retCode, 0);
+  assert.match(captured.url, /\/v5\/user\/query-api/);
+  assert.equal(captured.options.method, 'GET');
+  assert.equal(captured.options.headers['X-BAPI-API-KEY'], 'test-key');
+  assert.equal(captured.options.headers['X-BAPI-TIMESTAMP'], '1700000000000');
+  assert.equal(captured.options.headers['X-BAPI-RECV-WINDOW'], '5000');
+  assert.match(captured.options.headers['X-BAPI-SIGN'], /^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify(captured).includes('test-secret'));
+});
+
