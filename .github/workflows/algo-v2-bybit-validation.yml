@@ -1,0 +1,115 @@
+name: ALGO V2 Bybit Native Validation
+
+on:
+  push:
+    branches:
+      - agent/algo-v2-core-v1
+    paths:
+      - .github/workflows/algo-v2-bybit-validation.yml
+      - crypto-market-monitor-full-source/algo/**
+      - crypto-market-monitor-full-source/tests/**
+      - crypto-market-monitor-full-source/scripts/diagnose-bybit-exposure.mjs
+      - crypto-market-monitor-full-source/scripts/analyze-bybit-trade-attribution.mjs
+      - crypto-market-monitor-full-source/scripts/analyze-bybit-signal-funnel.mjs
+      - crypto-market-monitor-full-source/scripts/analyze-bybit-risk-decisions.mjs
+      - crypto-market-monitor-full-source/scripts/run-bybit-alpha-folds.mjs
+      - crypto-market-monitor-full-source/validation/bybit-validation-trigger.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+
+      - name: Run isolated ALGO unit regression
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          mapfile -t files < <(find tests -maxdepth 1 -name '*.test.mjs' ! -name 'rendered-html.test.mjs' -print | sort)
+          printf 'Running %s isolated test files\n' "${#files[@]}"
+          node --test "${files[@]}"
+
+      - name: Download direct Bybit BTCUSDT 60m archives, 2020-2024
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p archive validation-results
+          : > archive/BTCUSDT-60m.csv
+          : > archive/BTCUSDT-manifest.txt
+          for year in 2020 2021 2022 2023 2024; do
+            base="https://public.bybit.com/kline_for_metatrader4/BTCUSDT/${year}/"
+            html=$(curl -L -sS --fail --retry 3 --max-time 30 "$base")
+            mapfile -t files < <(printf '%s' "$html" | grep -oE "BTCUSDT_60_${year}-[0-9-]+_[0-9-]+\.csv\.gz" | sort -u)
+            if [ ${#files[@]} -lt 1 ]; then
+              echo "No BTCUSDT 60m archive files found for ${year}" >&2
+              exit 2
+            fi
+            echo "${year}: ${#files[@]} files" | tee -a archive/BTCUSDT-manifest.txt
+            printf '%s\n' "${files[@]}" >> archive/BTCUSDT-manifest.txt
+            for file in "${files[@]}"; do
+              curl -L -sS --fail --retry 3 --max-time 60 "${base}${file}" | gzip -dc >> archive/BTCUSDT-60m.csv
+            done
+          done
+          echo "BTCUSDT raw rows: $(wc -l < archive/BTCUSDT-60m.csv)"
+          cat archive/BTCUSDT-manifest.txt
+
+      - name: Validate frozen BTCUSDT V1.2 on clean contiguous segments
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/run-bybit-mt4-segment-validation.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024.json
+
+      - name: Diagnose exposure drift on frozen BTCUSDT V1.2
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/diagnose-bybit-exposure.mjs --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-exposure-diagnostic.json
+
+      - name: Analyze BTCUSDT V1.2 trades by year and regime
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/analyze-bybit-trade-attribution.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-attribution.json
+
+      - name: Analyze BTCUSDT V1.2 yearly signal funnel
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/analyze-bybit-signal-funnel.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-signal-funnel.json
+
+      - name: Analyze BTCUSDT V1.2 yearly risk decisions
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/analyze-bybit-risk-decisions.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-risk-decisions.json
+
+      - name: Run BTCUSDT V1.2 independent risk-reset alpha folds
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/run-bybit-alpha-folds.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-alpha-folds.json
+
+      - name: Run frozen BTCUSDT V1.2 robustness matrix
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/run-bybit-mt4-robustness.mjs --symbol BTCUSDT --min-hours 4800 --input archive/BTCUSDT-60m.csv --out validation-results/BTCUSDT-2020-2024-robustness.json
+
+      - name: Print summaries
+        if: always()
+        working-directory: crypto-market-monitor-full-source
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for f in validation-results/*.json; do
+            echo "===== $f ====="
+            cat "$f"
+          done
+
+      - name: Upload validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: algo-v2-btc-bybit-2020-2024-validation
+          path: |
+            crypto-market-monitor-full-source/validation-results/*.json
+            crypto-market-monitor-full-source/archive/BTCUSDT-manifest.txt
+          if-no-files-found: warn

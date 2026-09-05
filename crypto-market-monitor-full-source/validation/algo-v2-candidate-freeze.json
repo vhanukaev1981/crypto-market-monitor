@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "evidence": {
+    "researchHead": "03211a2a7d1bb55b20fc9d9b91b39cfd1c1ac3f9",
+    "workflowName": "ALGO V2 Bybit Spot Research",
+    "workflowRunId": 33065509531,
+    "artifact": {
+      "name": "algo-v2-btc-bybit-spot-research",
+      "id": 9643733715,
+      "digest": "sha256:757f23fe259f81bfa275a9a2ed2324274de13bcc00fe9b3bb900f98e181d0021"
+    }
+  },
+  "provenance": {
+    "market": "BYBIT_SPOT",
+    "source": "BYBIT_PUBLIC_SPOT_TRADE_ARCHIVES",
+    "aggregation": "TRADE_STREAM_TO_OHLCV_1H",
+    "interval": "1h",
+    "researchWindowStartMonth": "2022-11",
+    "researchWindowEndMonth": "2024-12",
+    "blindOosWindow": "2025-01 onward",
+    "archiveCoverageStart": "2022-11-10T00:00:00.000Z",
+    "archiveCoverageEnd": "2024-12-31T23:00:00.000Z",
+    "candleCount": 18792,
+    "gapCount": 0,
+    "syntheticCandles": 0,
+    "syntheticRepair": false,
+    "preArchiveMissingHours": 216
+  },
+  "freeze": {
+    "candidateName": "DAILY_EMA200_OVEREXTENSION",
+    "candidateState": "FROZEN_FOR_FUTURE_BLIND_OOS",
+    "thresholdPct": 25,
+    "evaluatedThresholdsPct": [
+      20,
+      25,
+      30
+    ],
+    "sensitivityOnlyThresholdsPct": [
+      20,
+      30
+    ],
+    "rationale": "Avoid long entries after the completed 1D trend is materially overextended above EMA200.",
+    "usesCompletedHigherTimeframeOnly": true,
+    "tuningAfterFreeze": false,
+    "oosLocked": true,
+    "blindOosOpened": false,
+    "noStrategyBehaviorChange": true
+  },
+  "parameters": {
+    "startingEquity": 100000,
+    "riskPct": 0.0035,
+    "maxPositionPct": 0.25,
+    "hardExposurePct": 0.3,
+    "atrStopMult": 1.5,
+    "trailAtrMult": 2,
+    "spreadBps": 2,
+    "slippageBps": 2,
+    "feeBps": 10,
+    "maxSpreadBps": 10,
+    "maxSlippageBps": 10
+  },
+  "metrics": {
+    "research2023": {
+      "netReturnPct": 5.802356,
+      "maxDrawdownPct": 1.93061,
+      "profitFactor": 4.525931,
+      "expectancy": 362.647258,
+      "completedTrades": 16
+    },
+    "validation2024": {
+      "netReturnPct": 0.484937,
+      "maxDrawdownPct": 3.125476,
+      "profitFactor": 1.07045,
+      "expectancy": 12.123436,
+      "completedTrades": 40
+    }
+  },
+  "blindOosPassCriteria": {
+    "netReturnPct": ">0",
+    "profitFactor": ">1.0",
+    "expectancy": ">0",
+    "maxDrawdownPct": "<=5.0",
+    "maxExposurePct": "<=30.0",
+    "syntheticRepair": false,
+    "dataQualityViolations": 0,
+    "tuningAfterFreeze": false
+  }
+}
