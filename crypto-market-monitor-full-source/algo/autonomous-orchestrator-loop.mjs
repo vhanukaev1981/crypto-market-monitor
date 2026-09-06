@@ -40,6 +40,9 @@ const STOP_ACTIONS = new Set([
   'STOP_REVIEW_ERROR',
   'STOP_PLAN_UNAVAILABLE',
   'STOP_PERMISSION',
+  'STOP_STATE_UNAVAILABLE',
+  'STOP_STATE_INVALID',
+  'STOP_STATE_PERSIST_FAILED',
   'BACKLOG_EXHAUSTED',
 ]);
 
@@ -121,28 +124,31 @@ export function createOrchestratorLoop(config = {}) {
   }
 
   async function loadPersisted(reconciled) {
-    let blob = null;
-    try { blob = await stateStore.load(); } catch { blob = null; }
+    let blob;
+    try {
+      blob = await stateStore.load();
+    } catch (error) {
+      // An IO / auth failure reading canonical state is NOT "no state" — stop.
+      return { error: 'UNAVAILABLE', message: error.message };
+    }
     const runtime = (blob && blob.runtime && typeof blob.runtime === 'object')
-      ? { ...blob.runtime }
-      : { reviewRequestId: null, reviewRequestSha: null };
-    let snapshot;
+      ? { reviewRequestId: null, reviewRequestSha: null, pendingReviewFor: null, ...blob.runtime }
+      : { reviewRequestId: null, reviewRequestSha: null, pendingReviewFor: null };
     if (blob && blob.snapshot) {
       try {
         machine.validateSnapshot(blob.snapshot);
-        snapshot = blob.snapshot;
-      } catch {
-        snapshot = bootstrapSnapshot(reconciled);
+        return { snapshot: blob.snapshot, runtime };
+      } catch (error) {
+        // A persisted-but-invalid snapshot must not be silently reset.
+        return { error: 'INVALID', message: error.message };
       }
-    } else {
-      snapshot = bootstrapSnapshot(reconciled);
     }
-    return { snapshot, runtime };
+    return { snapshot: bootstrapSnapshot(reconciled), runtime };
   }
 
   async function persist(snapshot, runtime) {
-    try { await stateStore.save({ snapshot, runtime }); }
-    catch (error) { logger({ level: 'warn', msg: 'stateStore.save failed', error: error.message }); }
+    // A failure to persist canonical state must STOP the tick, not be swallowed.
+    await stateStore.save({ snapshot, runtime });
   }
 
   // --- snapshot forward-sync + retry overlay ------------------------------
@@ -302,6 +308,9 @@ export function createOrchestratorLoop(config = {}) {
 
   async function runMutator(fn) {
     try {
+      // R2: re-assert the fence IMMEDIATELY before the mutation (in addition to
+      // guardMutation and the adapter's commit-time leaseCheck).
+      if (typeof lease?.assertLease === 'function') await lease.assertLease(fenceToken);
       return await guardedMutation(fn);
     } catch (error) {
       if (PERMISSION_RE.test(error.message)) fail(ERR.PERMISSION, error.message);
@@ -310,7 +319,12 @@ export function createOrchestratorLoop(config = {}) {
     }
   }
 
-  async function executeDecision(decision, reconciled, snapshot, runtime) {
+  function claudeBranchFor(taskId) {
+    const s = String(taskId).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return `agent/claude-${s || 'task'}`;
+  }
+
+  async function executeDecision(decision, reconciled, snapshot, runtime, reviewOutcome, ctx) {
     switch (decision.action) {
       case 'INTEGRATE': {
         if (isProtectedBranch(decision.target)) fail(ERR.SAFETY, 'integration target is a protected branch');
@@ -318,6 +332,7 @@ export function createOrchestratorLoop(config = {}) {
           prNumber: reconciled.pr ? reconciled.pr.number : null,
           headSha: reconciled.headSha,
           target: decision.target,
+          taskId: reconciled.taskId || snapshot.taskId,
         }));
         break;
       }
@@ -329,13 +344,23 @@ export function createOrchestratorLoop(config = {}) {
         break;
       case 'RECORD_APPROVAL':
         if (typeof mutators.recordApproval === 'function') {
-          await runMutator(() => mutators.recordApproval({ headSha: reconciled.headSha }));
+          const ev = reviewOutcome && reviewOutcome.evidence ? reviewOutcome.evidence : {};
+          await runMutator(() => mutators.recordApproval({
+            verdict: 'APPROVED_FOR_INTEGRATION',
+            sha: reconciled.headSha,
+            reviewerId: ev.reviewerId || null,
+          }));
         }
         break;
       case 'REQUEST_REVIEW': {
         if (reviewGate && reviewGate.configured !== false && reconciled.pr && reconciled.headSha) {
-          const req = await runMutator(async () => {
-            const submitted = await reviewGate.requestIndependentReview({
+          if (runtime.reviewRequestId && runtime.reviewRequestSha === reconciled.headSha) break; // already have one
+          // R4: persist the INTENT before submitting, so a crash between submit
+          // and id-persistence does not silently duplicate paid review work.
+          runtime.pendingReviewFor = reconciled.headSha;
+          if (ctx && typeof ctx.persist === 'function') await ctx.persist();
+          const submitted = await runMutator(async () => {
+            const out = await reviewGate.requestIndependentReview({
               repo: reconciled.repo,
               prNumber: reconciled.pr.number,
               headSha: reconciled.headSha,
@@ -344,19 +369,28 @@ export function createOrchestratorLoop(config = {}) {
               ciEvidence: { runId: (reconciled.evidence && reconciled.evidence.ci && reconciled.evidence.ci.runId) || 'observed', sha: reconciled.headSha },
               priorFindings: reconciled.priorFindings || [],
             });
-            if (typeof mutators.recordReviewRequest === 'function') await mutators.recordReviewRequest(submitted);
-            return submitted;
+            if (typeof mutators.recordReviewRequest === 'function') {
+              await mutators.recordReviewRequest({ ...out, headSha: reconciled.headSha });
+            }
+            return out;
           });
-          if (req && req.requestId) {
-            runtime.reviewRequestId = req.requestId;
+          if (submitted && submitted.requestId) {
+            runtime.reviewRequestId = submitted.requestId;
             runtime.reviewRequestSha = reconciled.headSha;
+            if (ctx && typeof ctx.persist === 'function') await ctx.persist();
           }
         }
         break;
       }
       case 'SELECT_NEXT_TASK':
         if (typeof mutators.recordNextTask === 'function') {
-          await runMutator(() => mutators.recordNextTask({ taskId: decision.taskId }));
+          const baseSha = reconciled.integrationHead || reconciled.headSha || null;
+          if (!baseSha || /^0+$/.test(baseSha)) fail(ERR.SAFETY, 'refusing next-task dispatch with an invalid base SHA');
+          await runMutator(() => mutators.recordNextTask({
+            taskId: decision.taskId,
+            branch: claudeBranchFor(decision.taskId),
+            baseSha,
+          }));
         }
         break;
       default:
@@ -399,7 +433,14 @@ export function createOrchestratorLoop(config = {}) {
 
     // 3. Durable snapshot: load, sync forward to the reconciled state, apply
     //    the retry overlay (attempt++ / escalate) through the real state machine.
-    const { snapshot: loaded, runtime } = await loadPersisted(reconciled);
+    const persisted = await loadPersisted(reconciled);
+    if (persisted.error === 'UNAVAILABLE') {
+      return Object.freeze({ status: 'STOPPED', action: 'STOP_STATE_UNAVAILABLE', error: persisted.message });
+    }
+    if (persisted.error === 'INVALID') {
+      return Object.freeze({ status: 'STOPPED', action: 'STOP_STATE_INVALID', error: persisted.message });
+    }
+    const { snapshot: loaded, runtime } = persisted;
     let snapshot = syncForward(loaded, reconciled);
 
     // 4. Context, using the DURABLE attempt count.
@@ -456,25 +497,34 @@ export function createOrchestratorLoop(config = {}) {
       }
     }
 
-    // 7. Persist BEFORE acting (crash after persist -> reconcile re-derives;
-    //    crash after acting -> next reconcile shows the new GitHub state).
-    await persist(snapshot, runtime);
+    // 7. Persist BEFORE acting. A persist failure STOPS the tick fail-closed —
+    //    the decision must never run from state we could not durably record.
+    try {
+      await persist(snapshot, runtime);
+    } catch (error) {
+      return Object.freeze({ status: 'STOPPED', action: 'STOP_STATE_PERSIST_FAILED', error: error.message });
+    }
 
     // 8. Execute (fenced). Permission / lease failures stop the daemon.
+    const ctx = { persist: () => persist(snapshot, runtime) };
     try {
-      await executeDecision(decision, reconciled, snapshot, runtime);
+      await executeDecision(decision, reconciled, snapshot, runtime, reviewOutcome, ctx);
     } catch (error) {
-      await persist(snapshot, runtime);
+      try { await persist(snapshot, runtime); } catch { /* already failing */ }
       if (error.message.startsWith(ERR.PERMISSION)) {
         return Object.freeze({ status: 'STOPPED', action: 'STOP_PERMISSION', state: effectiveState, error: error.message });
       }
       if (error.message.startsWith('ORCHESTRATOR_LOOP_LEASE_LOST')) {
         return Object.freeze({ status: 'LEASE_LOST', action: null, error: error.message });
       }
+      if (error.message.startsWith(ERR.SAFETY)) {
+        return Object.freeze({ status: 'STOPPED', action: 'STOP_SAFETY', state: effectiveState, error: error.message });
+      }
       throw error;
     }
 
-    await persist(snapshot, runtime);
+    try { await persist(snapshot, runtime); }
+    catch (error) { return Object.freeze({ status: 'STOPPED', action: 'STOP_STATE_PERSIST_FAILED', error: error.message }); }
 
     return Object.freeze({
       status: STOP_ACTIONS.has(decision.action) ? 'STOPPED' : 'OK',

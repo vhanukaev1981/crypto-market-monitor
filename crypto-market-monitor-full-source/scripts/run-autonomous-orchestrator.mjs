@@ -95,20 +95,31 @@ async function liveAdapters(integrationBranch) {
   const repo = process.env.ALGOBOT_REPO;
   const token = process.env.ALGOBOT_GITHUB_TOKEN;
   const holderId = process.env.ALGOBOT_HOLDER_ID || `algobot-${process.pid}`;
-  const claudeBranch = process.env.ALGOBOT_CLAUDE_BRANCH || 'agent/claude-p0-current';
+  const controlBranch = process.env.ALGOBOT_CONTROL_BRANCH || 'ops/algobot-orchestrator-control';
   const requiredChecks = (process.env.ALGOBOT_REQUIRED_CHECKS || '').split(',').map((s) => s.trim()).filter(Boolean);
   const planPath = process.env.ALGOBOT_P0_PLAN_PATH || 'docs/superpowers/plans/2026-09-05-algobot-p0-production-architecture.md';
   const enableIntegration = process.env.ALGOBOT_ENABLE_P0_INTEGRATION === '1';
+  const trustedReviewers = (process.env.ALGOBOT_TRUSTED_REVIEWERS || 'vhanukaev1981').split(',').map((s) => s.trim()).filter(Boolean);
+  const envCompleted = (process.env.ALGOBOT_COMPLETED_TASKS || '').split(',').map((s) => s.trim()).filter(Boolean);
 
   if (!repo || !token) {
     throw new Error('ORCHESTRATOR_LIVE_ADAPTERS_NOT_PROVISIONED: set ALGOBOT_REPO and ALGOBOT_GITHUB_TOKEN');
   }
+  if (isProtectedBranch(controlBranch)) {
+    throw new Error(`ORCHESTRATOR_LIVE_ADAPTERS_NOT_PROVISIONED: control branch ${controlBranch} is protected`);
+  }
+  if (requiredChecks.length === 0) {
+    throw new Error('ORCHESTRATOR_LIVE_ADAPTERS_NOT_PROVISIONED: ALGOBOT_REQUIRED_CHECKS must be non-empty');
+  }
 
-  const gh = createGithubRestAdapter({ repo, token });
-  const leaseStore = createGithubFileLeaseStore({ repo, token });
-  const stateStore = createGithubStateStore({ repo, token });
+  const leaseStore = createGithubFileLeaseStore({ repo, token, controlBranch });
   const lease = createOrchestratorLease({ store: leaseStore, holderId, ttlMs: Number(process.env.ALGOBOT_LEASE_TTL_MS || 300000), now: () => Date.now() });
   const held = await lease.acquireLease();
+  let fenceToken = held.fenceToken;
+  const leaseCheck = () => lease.assertLease(fenceToken); // commit-time fence for every control-plane write
+
+  const gh = createGithubRestAdapter({ repo, token, controlBranch, trustedReviewers, leaseCheck });
+  const stateStore = createGithubStateStore({ repo, token, controlBranch, leaseCheck });
 
   // Independent review client — only if explicitly configured; otherwise the
   // gate is unconfigured and the loop fail-closes at READY_FOR_CHATGPT_REVIEW.
@@ -135,38 +146,57 @@ async function liveAdapters(integrationBranch) {
 
   const dispatcher = createClaudeDispatcher({ runProcess: createClaudeCliRunner({ claudeBin: process.env.ALGOBOT_CLAUDE_BIN || 'claude' }) });
 
-  const task = { id: process.env.ALGOBOT_CURRENT_TASK_ID || 'p0-current', branch: claudeBranch, requiredChecks };
+  // The current task/branch are re-derived from the DURABLE control-branch
+  // cursor on every tick — never a fixed closure.
+  async function currentTask() {
+    const cursor = await gh.readCursor();
+    const id = (cursor && cursor.currentTaskId) || process.env.ALGOBOT_CURRENT_TASK_ID || 'p0-current';
+    const branch = (cursor && cursor.currentBranch) || `agent/claude-${String(id).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    return { id, branch, requiredChecks };
+  }
 
   const suppressedIntegrate = async (a) => { emit({ level: 'warn', msg: 'integration disabled (ALGOBOT_ENABLE_P0_INTEGRATION!=1)', args: a }); };
+  const bootTask = await currentTask();
 
   return {
     lease,
-    fenceToken: held.fenceToken,
+    fenceToken,
     stateMachine: createOrchestratorStateMachine({ integrationBranch }),
     stateStore,
-    bootstrap: { repository: repo, taskId: task.id, branch: claudeBranch },
-    reconcile: () => reconcileGithubState({ repo, integrationBranch, task, github: gh, integrationLedger: gh.integrationLedger }),
-    evaluateCi: (headSha, attempt) => Promise.resolve(gh.getCiStatus(headSha, requiredChecks)).then(async () => {
-      const runsRes = await gh.getCiStatus(headSha, requiredChecks);
-      return evaluateCiGate({ headSha, requiredChecks: requiredChecks.length ? requiredChecks : ['ci'], runs: [{ name: (requiredChecks[0] || 'ci'), headSha, status: runsRes.state === 'PENDING' || runsRes.state === 'NONE' ? 'in_progress' : 'completed', conclusion: runsRes.state === 'GREEN' ? 'success' : runsRes.state === 'FAILED' ? 'failure' : null, runId: runsRes.runId }], attempt: attempt || 1 });
-    }),
+    bootstrap: { repository: repo, taskId: bootTask.id, branch: bootTask.branch },
+    reconcile: async () => {
+      const task = await currentTask();
+      const integrationHead = await gh.getBranchHead(integrationBranch);
+      const r = await reconcileGithubState({ repo, integrationBranch, task, github: gh, integrationLedger: gh.integrationLedger });
+      return { ...r, repo, integrationHead };
+    },
+    evaluateCi: async (headSha, attempt) => {
+      const ci = await gh.getCiStatus(headSha, requiredChecks); // ONE call, per-check breakdown
+      return evaluateCiGate({ headSha, requiredChecks, runs: ci.checks || [], attempt: attempt || 1 });
+    },
     reviewGate,
-    dispatchClaude: ({ reconciled, attempt }) => dispatcher.dispatchClaudeTask({
-      task,
-      baseSha: reconciled.headSha || process.env.ALGOBOT_BASE_SHA || '0'.repeat(40),
-      branch: claudeBranch,
-      acceptanceCriteria: 'See the approved P0 plan for this task.',
-      constraints: ['NO_MERGE_TO_MAIN', 'NO_REAL_BYBIT_ORDER', 'PRESERVE_CANARY_LIMITS', 'STRICT_RED_GREEN_TDD'],
-      attempt: attempt || 1,
-    }),
+    dispatchClaude: async ({ reconciled, attempt }) => {
+      const task = await currentTask();
+      const baseSha = (reconciled && reconciled.integrationHead)
+        || await gh.getBranchHead(integrationBranch); // real P0 head, never all-zeros
+      if (!baseSha || /^0+$/.test(baseSha)) throw new Error('ORCHESTRATOR_LIVE_DISPATCH_NO_BASE_SHA');
+      return dispatcher.dispatchClaudeTask({
+        task,
+        baseSha,
+        branch: task.branch,
+        acceptanceCriteria: `See the approved P0 plan (${planPath}) for ${task.id}.`,
+        constraints: ['NO_MERGE_TO_MAIN', 'NO_REAL_BYBIT_ORDER', 'PRESERVE_CANARY_LIMITS', 'STRICT_RED_GREEN_TDD'],
+        attempt: attempt || 1,
+      });
+    },
     planContext: async () => {
       const md = await readFile(new URL(`../../${planPath}`, import.meta.url), 'utf8').catch(() => readFile(planPath, 'utf8'));
       const plan = parseP0Plan(md);
-      const completedGates = [];
+      const completedGates = [...envCompleted];
       for (const t of plan.tasks) {
         if (t.status === 'DONE' || await gh.integrationLedger.hasIntegratedTask(t.id)) completedGates.push(t.id);
       }
-      return { plan, completedGates };
+      return { plan, completedGates: [...new Set(completedGates)] };
     },
     mutators: {
       ...gh.mutators,

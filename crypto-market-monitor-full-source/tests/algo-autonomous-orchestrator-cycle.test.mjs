@@ -450,7 +450,7 @@ test('R3: SELECT_NEXT_TASK records a fresh branch + real base sha via recordNext
   assert.equal(calls[0].taskId, 'p0-task-4-live-canary');
   assert.match(calls[0].branch, /^agent\/claude-/);
   assert.equal(calls[0].baseSha, INTEG_HEAD);
-  assert.notMatch(calls[0].baseSha, /^0+$/);
+  assert.doesNotMatch(calls[0].baseSha, /^0+$/);
 });
 
 test('R4: the review-request intent is persisted BEFORE submitting; a failed submit is retried at most once', async () => {
