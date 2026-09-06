@@ -13,7 +13,16 @@ const ERR = Object.freeze({
   SAFETY: 'ORCHESTRATOR_SAFETY_VIOLATION',
   TRANSIENT: 'ORCHESTRATOR_RECONCILE_FAILED',
   CAS: 'ORCHESTRATOR_ADAPTER_CAS_CONFLICT',
+  AUTH: 'ORCHESTRATOR_ADAPTER_AUTH',
+  INPUT: 'ORCHESTRATOR_ADAPTER_INVALID_INPUT',
 });
+
+const CONTROL_ERR = 'ORCHESTRATOR_STALE_FENCE';
+
+function requireControlBranch(controlBranch) {
+  if (!isNonEmptyString(controlBranch)) fail(ERR.CONFIG, 'controlBranch is required (a dedicated non-default branch)');
+  if (isProtectedBranch(controlBranch)) fail(ERR.SAFETY, `controlBranch ${controlBranch} is a protected / default branch`);
+}
 
 const PASS = new Set(['success', 'neutral', 'skipped']);
 
@@ -43,17 +52,24 @@ function githubTransport(repo, token, fetchImpl) {
       headers: { ...headers, ...(init.headers || {}) },
       body: init.body ? JSON.stringify(init.body) : undefined,
     });
+    // Auth failures are NOT transient — never retry them into a silent loop.
+    if (res.status === 401 || res.status === 403) fail(ERR.AUTH, `GitHub ${res.status} on ${path}`);
     if (res.status >= 500) fail(ERR.TRANSIENT, `GitHub ${res.status} on ${path}`);
     return res;
   }
   return { call };
 }
 
-function githubFiles(repo, token, fetchImpl) {
+// All control-plane reads/writes are pinned to a dedicated non-default branch.
+// `leaseCheck` (if provided) re-verifies the lease fence at commit time.
+function githubFiles(repo, token, fetchImpl, { controlBranch, leaseCheck } = {}) {
+  requireControlBranch(controlBranch);
   const { call } = githubTransport(repo, token, fetchImpl);
   return {
+    controlBranch,
     async getFile(path) {
-      const res = await call(`/contents/${path}`);
+      const sep = path.includes('?') ? '&' : '?';
+      const res = await call(`/contents/${path}${sep}ref=${encodeURIComponent(controlBranch)}`);
       if (res.status === 404) return null;
       if (!res.ok) fail(ERR.TRANSIENT, `contents GET ${res.status}`);
       const body = await res.json();
@@ -62,11 +78,14 @@ function githubFiles(repo, token, fetchImpl) {
       return { content, sha: body.sha };
     },
     async putFile(path, obj, expectedSha) {
+      if (typeof leaseCheck === 'function') await leaseCheck(); // fence at commit time
+      if (isProtectedBranch(controlBranch)) fail(ERR.SAFETY, `refusing to write to ${controlBranch}`);
       const res = await call(`/contents/${path}`, {
         method: 'PUT',
         body: {
           message: `orchestrator: update ${path}`,
           content: b64encode(JSON.stringify(obj, null, 2)),
+          branch: controlBranch,
           ...(expectedSha ? { sha: expectedSha } : {}),
         },
       });
@@ -86,15 +105,20 @@ export function createGithubRestAdapter(config = {}) {
     repo,
     token,
     fetchImpl = globalThis.fetch,
-    integrationLedgerPath = 'crypto-market-monitor-full-source/validation/autonomous-integration-ledger.json',
-    statusPath = 'crypto-market-monitor-full-source/validation/autonomous-orchestrator-status.json',
+    controlBranch,
+    trustedReviewers = [],
+    leaseCheck,
+    integrationLedgerPath = 'autonomous-integration-ledger.json',
+    statusPath = 'autonomous-orchestrator-status.json',
   } = config;
   requireConfig(repo, token);
   if (typeof fetchImpl !== 'function') fail(ERR.CONFIG, 'fetchImpl must be a function');
+  requireControlBranch(controlBranch);
+  if (!Array.isArray(trustedReviewers)) fail(ERR.CONFIG, 'trustedReviewers must be an array of GitHub logins');
 
   const owner = repo.split('/')[0];
   const { call } = githubTransport(repo, token, fetchImpl);
-  const files = githubFiles(repo, token, fetchImpl);
+  const files = githubFiles(repo, token, fetchImpl, { controlBranch, leaseCheck });
 
   async function getBranchHead(branch) {
     const res = await call(`/git/ref/heads/${encodeURIComponent(branch)}`);
@@ -121,18 +145,34 @@ export function createGithubRestAdapter(config = {}) {
   }
 
   async function getCiStatus(sha, requiredChecks = []) {
+    if (!Array.isArray(requiredChecks) || requiredChecks.length === 0) {
+      fail(ERR.INPUT, 'getCiStatus needs a non-empty requiredChecks list (empty = unsafe)');
+    }
     const res = await call(`/commits/${sha}/check-runs?per_page=100`);
     if (!res.ok) fail(ERR.TRANSIENT, `check-runs ${res.status}`);
     const body = await res.json();
-    let runs = Array.isArray(body.check_runs) ? body.check_runs : [];
-    if (Array.isArray(requiredChecks) && requiredChecks.length) {
-      runs = runs.filter((r) => requiredChecks.includes(r.name));
-    }
-    if (runs.length === 0) return { sha, state: 'NONE', runId: null };
-    const latest = runs.reduce((a, b) => ((b.started_at || '') >= (a.started_at || '') ? b : a));
-    if (runs.some((r) => r.status !== 'completed')) return { sha, state: 'PENDING', runId: String(latest.id) };
-    if (runs.some((r) => !PASS.has(r.conclusion))) return { sha, state: 'FAILED', runId: String(latest.id) };
-    return { sha, state: 'GREEN', runId: String(latest.id) };
+    const all = Array.isArray(body.check_runs) ? body.check_runs : [];
+    // Per-check breakdown, one call. A required check with no run is 'missing'.
+    const checks = requiredChecks.map((name) => {
+      const forName = all.filter((r) => r.name === name);
+      if (forName.length === 0) return { name, headSha: sha, status: 'missing', conclusion: null, runId: null };
+      const latest = forName.reduce((a, b) => ((b.started_at || '') >= (a.started_at || '') ? b : a));
+      return {
+        name,
+        headSha: sha,
+        status: latest.status,
+        conclusion: latest.conclusion ?? null,
+        runId: latest.id != null ? String(latest.id) : null,
+        startedAt: latest.started_at || null,
+      };
+    });
+    let state;
+    if (checks.some((c) => c.status === 'missing')) state = 'NONE';
+    else if (checks.some((c) => c.status !== 'completed')) state = 'PENDING';
+    else if (checks.some((c) => !PASS.has(c.conclusion))) state = 'FAILED';
+    else state = 'GREEN';
+    const latestRunId = checks.map((c) => c.runId).filter(Boolean).sort().pop() || null;
+    return { sha, state, runId: latestRunId, checks };
   }
 
   async function getReviewVerdict(prNumber) {
@@ -142,12 +182,26 @@ export function createGithubRestAdapter(config = {}) {
     if (!Array.isArray(comments)) return null;
     let latest = null;
     for (const c of comments) {
-      const m = typeof c.body === 'string' && c.body.match(/ALGOBOT_REVIEW_VERDICT:\s*(\{.*\})/s);
-      if (!m) continue;
-      try {
-        const parsed = JSON.parse(m[1]);
-        latest = { verdict: parsed.verdict, sha: parsed.sha, reviewerId: parsed.reviewerId, evidenceUrl: c.html_url, submittedAt: c.created_at };
-      } catch { /* ignore malformed markers */ }
+      if (typeof c.body !== 'string') continue;
+      const author = c.user && c.user.login;
+      // Only a marker from an allow-listed reviewer is canonical evidence.
+      if (!author || !trustedReviewers.includes(author)) continue;
+      if (!/ALGOBOT_REVIEW_VERDICT:/.test(c.body)) continue;
+      const m = c.body.match(/ALGOBOT_REVIEW_VERDICT:\s*(\{[\s\S]*?\})\s*(?:$|\n)/);
+      let parsed = null;
+      if (m) { try { parsed = JSON.parse(m[1]); } catch { parsed = null; } }
+      if (parsed && typeof parsed === 'object') {
+        latest = {
+          verdict: parsed.verdict,
+          sha: parsed.sha,
+          reviewerId: author,
+          evidenceUrl: c.html_url,
+          submittedAt: c.created_at,
+        };
+      } else {
+        // A marker present but unparseable from a TRUSTED author is surfaced.
+        latest = { malformed: true, reviewerId: author, evidenceUrl: c.html_url, submittedAt: c.created_at };
+      }
     }
     return latest;
   }
@@ -190,24 +244,56 @@ export function createGithubRestAdapter(config = {}) {
     },
   };
 
+  async function createBranchRef(newBranch, fromSha) {
+    if (isProtectedBranch(newBranch)) fail(ERR.SAFETY, `refusing to create protected branch ${newBranch}`);
+    const res = await call('/git/refs', { method: 'POST', body: { ref: `refs/heads/${newBranch}`, sha: fromSha } });
+    if (res.status === 422) return { created: false, reason: 'exists' }; // idempotent
+    if (!res.ok) fail(ERR.TRANSIENT, `create ref ${res.status}`);
+    return { created: true };
+  }
+
+  async function readCursor() {
+    const cur = await files.getFile('autonomous-orchestrator-task-cursor.json');
+    return cur && cur.content ? cur.content : null;
+  }
+  async function writeCursor(cursor) {
+    const cur = await files.getFile('autonomous-orchestrator-task-cursor.json');
+    await files.putFile('autonomous-orchestrator-task-cursor.json', cursor, cur ? cur.sha : undefined);
+  }
+  async function appendReviewEvidence(record) {
+    const cur = await files.getFile('autonomous-review-evidence.json');
+    const log = (cur && cur.content && Array.isArray(cur.content.records)) ? cur.content : { records: [] };
+    log.records.push({ ...record, at: new Date().toISOString() });
+    await files.putFile('autonomous-review-evidence.json', log, cur ? cur.sha : undefined);
+  }
+
   const mutators = {
     integratePr: async (args) => {
       const out = await integratePr(args);
-      try { if (args.taskId) await recordIntegration(args.taskId, args.headSha); } catch { /* ledger is best-effort */ }
+      // The ledger entry IS the durable integration evidence — a write failure
+      // must propagate, not be swallowed.
+      if (!args.taskId) fail(ERR.INPUT, 'integratePr requires taskId for the durable integration ledger');
+      await recordIntegration(args.taskId, args.headSha);
       return out;
     },
     async postStatus(status) {
-      try {
-        const cur = await files.getFile(statusPath);
-        await files.putFile(statusPath, status, cur ? cur.sha : undefined);
-      } catch { /* status publishing is best-effort, never blocks a tick */ }
+      const cur = await files.getFile(statusPath);
+      await files.putFile(statusPath, status, cur ? cur.sha : undefined);
     },
-    async recordReviewRequest() { /* the request id lives in the durable state store */ },
-    async recordApproval() { /* approval evidence lives on the PR */ },
-    async recordNextTask() { /* next-task selection is derived from the plan + ledger */ },
+    async recordReviewRequest(req) {
+      await appendReviewEvidence({ kind: 'request', requestId: req && req.requestId, headSha: req && req.headSha });
+    },
+    async recordApproval(evidence) {
+      await appendReviewEvidence({ kind: 'verdict', ...evidence });
+    },
+    async recordNextTask({ taskId, branch, baseSha }) {
+      await createBranchRef(branch, baseSha);
+      await writeCursor({ currentTaskId: taskId, currentBranch: branch, baseSha, at: new Date().toISOString() });
+    },
   };
 
   return {
+    controlBranch,
     getBranchHead,
     getOpenPullRequest,
     getCiStatus,
@@ -215,6 +301,9 @@ export function createGithubRestAdapter(config = {}) {
     isAncestor,
     integratePr, // raw; enforces the protected-branch guard
     recordIntegration,
+    createBranchRef,
+    readCursor,
+    writeCursor,
     integrationLedger,
     mutators,
   };
@@ -225,11 +314,12 @@ export function createGithubRestAdapter(config = {}) {
 // ---------------------------------------------------------------------------
 
 export function createGithubFileLeaseStore(config = {}) {
-  const { repo, token, path = 'crypto-market-monitor-full-source/validation/autonomous-orchestrator-lease.json', fetchImpl = globalThis.fetch } = config;
+  const { repo, token, path = 'autonomous-orchestrator-lease.json', fetchImpl = globalThis.fetch, controlBranch } = config;
   requireConfig(repo, token);
-  const files = githubFiles(repo, token, fetchImpl);
+  const files = githubFiles(repo, token, fetchImpl, { controlBranch });
 
   return {
+    controlBranch,
     async readLease() {
       const f = await files.getFile(path);
       return f && f.content ? f.content : null;
@@ -256,11 +346,12 @@ export function createGithubFileLeaseStore(config = {}) {
 // ---------------------------------------------------------------------------
 
 export function createGithubStateStore(config = {}) {
-  const { repo, token, path = 'crypto-market-monitor-full-source/validation/autonomous-orchestrator-state.json', fetchImpl = globalThis.fetch } = config;
+  const { repo, token, path = 'autonomous-orchestrator-state.json', fetchImpl = globalThis.fetch, controlBranch, leaseCheck } = config;
   requireConfig(repo, token);
-  const files = githubFiles(repo, token, fetchImpl);
+  const files = githubFiles(repo, token, fetchImpl, { controlBranch, leaseCheck });
 
   return {
+    controlBranch,
     async load() {
       const f = await files.getFile(path);
       return f && f.content ? f.content : null;
@@ -316,7 +407,9 @@ function slug(text) {
 
 export function parseP0Plan(markdown) {
   if (typeof markdown !== 'string' || !markdown.trim()) return { tasks: [] };
-  const headingRe = /^#{1,6}\s*Task\s+(\d+)\s*[—:-]\s*(.+?)\s*$/gm;
+  // Tolerate ~~strike~~ / **bold** decoration between the heading hashes and "Task".
+  const headingRe = /^#{1,6}\s*[~*_\s]*Task\s+(\d+)\s*[—:-]\s*(.+?)\s*$/gm;
+  const DONE_RE = /~~|\*\*\s*DONE\s*\*\*|__\s*DONE\s*__|\(\s*status:\s*done\s*\)/i;
   const raw = [];
   let m;
   while ((m = headingRe.exec(markdown)) !== null) {
@@ -325,10 +418,11 @@ export function parseP0Plan(markdown) {
     const statusM = line.match(/status:\s*([A-Za-z_]+)/i);
     const gateM = line.match(/gate:\s*([A-Z_]+)/);
     const dependsM = line.match(/depends:\s*([^)]+)/i);
+    const isDone = DONE_RE.test(line) || (statusM && statusM[1].toUpperCase() === 'DONE');
     raw.push({
       number,
-      title: line.replace(/\([^)]*\)/g, '').trim(),
-      status: statusM ? statusM[1].toUpperCase() : 'PENDING',
+      title: line.replace(/~~/g, '').replace(/\*\*[^*]*\*\*/g, '').replace(/\([^)]*\)/g, '').trim(),
+      status: isDone ? 'DONE' : (statusM ? statusM[1].toUpperCase() : 'PENDING'),
       gate: gateM ? gateM[1] : null,
       dependsNumbers: dependsM
         ? dependsM[1].split(',').map((s) => Number((s.match(/\d+/) || [])[0])).filter((n) => Number.isInteger(n))

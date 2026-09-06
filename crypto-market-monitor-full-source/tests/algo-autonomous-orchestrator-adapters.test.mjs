@@ -17,6 +17,7 @@ import {
 
 const REPO = 'vhanukaev1981/crypto-market-monitor';
 const TOKEN = 'ghp_fake';
+const CONTROL_BRANCH = "ops/algobot-orchestrator-control";
 
 function jsonResponse(body, { status = 200, headers = {} } = {}) {
   return {
@@ -51,7 +52,7 @@ test('every adapter factory fails closed without repo/token', () => {
 });
 
 test('the REST adapter refuses a protected integration target', async () => {
-  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl: recordingFetch([]) });
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl: recordingFetch([]) });
   await assert.rejects(() => gh.integratePr({ prNumber: 1, headSha: 'a'.repeat(40), target: 'main' }), /ORCHESTRATOR_SAFETY_VIOLATION/);
 });
 
@@ -62,32 +63,32 @@ test('getBranchHead returns the commit sha, or null on 404', async () => {
     ['/git/ref/heads/agent%2Fclaude-x', jsonResponse({ object: { sha: 'b'.repeat(40) } })],
     ['/git/ref/heads/missing', jsonResponse({ message: 'Not Found' }, { status: 404 })],
   ]);
-  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl });
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl });
   assert.equal(await gh.getBranchHead('agent/claude-x'), 'b'.repeat(40));
   assert.equal(await gh.getBranchHead('missing'), null);
 });
 
 test('getCiStatus classifies GREEN / FAILED / PENDING / NONE for a sha', async () => {
   const mk = (runs) => recordingFetch([['/check-runs', jsonResponse({ check_runs: runs })]]);
-  const green = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl: mk([{ name: 'c', status: 'completed', conclusion: 'success', id: 5, started_at: 't' }]) });
+  const green = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl: mk([{ name: 'c', status: 'completed', conclusion: 'success', id: 5, started_at: 't' }]) });
   assert.equal((await green.getCiStatus('a'.repeat(40), ['c'])).state, 'GREEN');
-  const failed = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl: mk([{ name: 'c', status: 'completed', conclusion: 'failure', id: 6 }]) });
+  const failed = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl: mk([{ name: 'c', status: 'completed', conclusion: 'failure', id: 6 }]) });
   assert.equal((await failed.getCiStatus('a'.repeat(40), ['c'])).state, 'FAILED');
-  const pending = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl: mk([{ name: 'c', status: 'in_progress', conclusion: null, id: 7 }]) });
+  const pending = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl: mk([{ name: 'c', status: 'in_progress', conclusion: null, id: 7 }]) });
   assert.equal((await pending.getCiStatus('a'.repeat(40), ['c'])).state, 'PENDING');
-  const none = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl: mk([]) });
+  const none = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl: mk([]) });
   assert.equal((await none.getCiStatus('a'.repeat(40), ['c'])).state, 'NONE');
 });
 
 test('isAncestor maps the compare API status to a boolean', async () => {
-  const behind = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl: recordingFetch([['/compare/', jsonResponse({ status: 'identical' })]]) });
+  const behind = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl: recordingFetch([['/compare/', jsonResponse({ status: 'identical' })]]) });
   assert.equal(await behind.isAncestor('a'.repeat(40), 'agent/algobot-p0-persistent-recovery'), true);
-  const diverged = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl: recordingFetch([['/compare/', jsonResponse({ status: 'diverged' })]]) });
+  const diverged = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl: recordingFetch([['/compare/', jsonResponse({ status: 'diverged' })]]) });
   assert.equal(await diverged.isAncestor('a'.repeat(40), 'agent/algobot-p0-persistent-recovery'), false);
 });
 
 test('a 5xx from GitHub surfaces as a transient reconcile failure', async () => {
-  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, fetchImpl: recordingFetch([['/git/ref/', jsonResponse({ message: 'bad gateway' }, { status: 502 })]]) });
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl: recordingFetch([['/git/ref/', jsonResponse({ message: 'bad gateway' }, { status: 502 })]]) });
   await assert.rejects(() => gh.getBranchHead('agent/claude-x'), /502|RECONCILE_FAILED|transient/i);
 });
 
@@ -108,7 +109,7 @@ test('the lease store reads/writes a JSON file with compare-and-set on the blob 
       return jsonResponse({ content: {}, commit: {} });
     }],
   ]);
-  const store = createGithubFileLeaseStore({ repo: REPO, token: TOKEN, path: 'ops/lease.json', fetchImpl });
+  const store = createGithubFileLeaseStore({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, path: 'ops/lease.json', fetchImpl });
   assert.equal(await store.readLease(), null);
   await store.writeLease({ state: 'HELD', holderId: 'a', fenceToken: 1 }, null);
   const back = await store.readLease();
@@ -129,7 +130,7 @@ test('the state store round-trips { snapshot, runtime }', async () => {
       return jsonResponse({});
     }],
   ]);
-  const store = createGithubStateStore({ repo: REPO, token: TOKEN, path: 'ops/state.json', fetchImpl });
+  const store = createGithubStateStore({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, path: 'ops/state.json', fetchImpl });
   assert.equal(await store.load(), null);
   await store.save({ snapshot: { state: 'CI_RUNNING' }, runtime: { reviewRequestId: 'rr' } });
   const back = await store.load();
@@ -204,7 +205,7 @@ test('parseP0Plan on empty / non-plan text returns an empty task list, not a thr
 // I-d: integration-ledger write failure propagates (not swallowed).
 // ===========================================================================
 
-const CONTROL_BRANCH = 'ops/algobot-orchestrator-control';
+
 
 function fetchLog(routes) {
   const calls = [];
