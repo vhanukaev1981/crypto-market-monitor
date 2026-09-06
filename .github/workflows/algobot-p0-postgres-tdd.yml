@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/algobot-p0-persistent-recovery
+      - agent/claude-algobot-p0-task2
     paths:
       - 'crypto-market-monitor-full-source/algo/**'
       - 'crypto-market-monitor-full-source/supabase/migrations/**'
