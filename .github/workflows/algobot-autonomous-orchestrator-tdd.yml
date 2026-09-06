@@ -1,0 +1,52 @@
+name: ALGOBOT Autonomous Orchestrator TDD
+
+# Verification authority for the ALGOBOT full autonomous orchestrator track
+# (spec: docs/superpowers/specs/2026-09-06-algobot-full-autonomous-orchestrator-design.md).
+# Runs the isolated ALGO regression suite (no external services) on every push
+# to the orchestrator implementation branch and to the P0 integration branch.
+
+on:
+  push:
+    branches:
+      - agent/autonomous-orchestrator-v1
+      - agent/algobot-p0-persistent-recovery
+    paths:
+      - 'crypto-market-monitor-full-source/algo/**'
+      - 'crypto-market-monitor-full-source/scripts/**'
+      - 'crypto-market-monitor-full-source/tests/**'
+      - '.github/workflows/algobot-autonomous-orchestrator-tdd.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: crypto-market-monitor-full-source
+
+concurrency:
+  group: algobot-autonomous-orchestrator-tdd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  isolated-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+      - name: Orchestrator + autonomous state-machine suite
+        run: node --test --test-concurrency=1 tests/algo-autonomous-*.test.mjs
+      - name: Full isolated ALGO regression (excludes DB-backed P0 and rendered HTML)
+        shell: bash
+        run: |
+          mapfile -t files < <(find tests -maxdepth 1 -name '*.test.mjs' \
+            ! -name 'rendered-html.test.mjs' \
+            ! -name 'algo-p0-*.test.mjs' \
+            -print | sort)
+          printf 'Running %s isolated test files\n' "${#files[@]}"
+          node --test --test-concurrency=1 "${files[@]}"
