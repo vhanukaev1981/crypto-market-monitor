@@ -460,3 +460,17 @@ test('Copilot: parseP0Plan ids use the p0-task-<n> convention', () => {
   assert.match(plan.tasks[0].id, /^p0-task-3-/);
   assert.match(plan.tasks[1].id, /^p0-task-4-/);
 });
+
+// ChatGPT PR #19 re-review 3 (important): the P0 plan must be read from canonical
+// GitHub state (a given ref), not a possibly-stale local checkout.
+test('getPlanContent reads a file from an arbitrary ref, not the control branch', async () => {
+  const fetchImpl = fetchLog([
+    ['/contents/docs/plan.md', (url) => {
+      assert.match(url, /ref=agent%2Falgobot-p0-persistent-recovery/);
+      return jsonResponse({ content: Buffer.from('# P0 Plan\n### Task 3 — Executor Fencing').toString('base64'), sha: 'z' });
+    }],
+  ]);
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl });
+  const md = await gh.getPlanContent('docs/plan.md', 'agent/algobot-p0-persistent-recovery');
+  assert.match(md, /Executor Fencing/);
+});

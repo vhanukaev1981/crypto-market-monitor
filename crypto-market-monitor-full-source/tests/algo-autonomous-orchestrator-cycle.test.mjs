@@ -614,3 +614,22 @@ test('Copilot loop:275: gatherReview does not poll with a synthetic id before an
   assert.equal(polls, 0, 'no fetchReviewOutcome before a request is submitted');
   assert.equal(r.action, 'REQUEST_REVIEW');
 });
+
+// ChatGPT PR #19 re-review 3 (B6b / Copilot loop:578): a lost lease STOPS the
+// daemon fail-closed — it does NOT reacquire and continue (split-brain risk with
+// commit-time leaseCheck closures holding the old token).
+test('B6b-strict: run() STOPS on LEASE_LOST even when reacquire would succeed', async () => {
+  let reacquired = 0;
+  const lease = {
+    async renewLease() { throw new Error('ORCHESTRATOR_LEASE_EXPIRED'); },
+    async assertLease() { throw new Error('ORCHESTRATOR_LEASE_EXPIRED'); },
+    async guardMutation() { throw new Error('ORCHESTRATOR_LEASE_EXPIRED'); },
+    async adoptLease() { reacquired += 1; return { fenceToken: 99 }; },
+    async acquireLease() { reacquired += 1; return { fenceToken: 99 }; },
+  };
+  const loop = durableLoop({ lease });
+  const summary = await loop.run({ intervalMs: 1, maxTicks: 4 });
+  assert.equal(summary.status, 'STOPPED');
+  assert.match(summary.reason, /LEASE/);
+  assert.equal(reacquired, 0, 'must not silently reacquire and continue');
+});

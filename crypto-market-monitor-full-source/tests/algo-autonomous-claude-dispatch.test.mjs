@@ -209,3 +209,12 @@ test('a detached kick-off result is accepted as DISPATCHED, not parsed for a mar
   const out = await dispatcher.dispatchClaudeTask(baseArgs());
   assert.equal(out.completion, 'DISPATCHED');
 });
+
+// ChatGPT PR #19 re-review 3 (B2): a detached worker must carry a job identity
+// (fence token + task + timestamp) so a stale worker's output is attributable.
+test('the packet carries a JOB_ID when one is supplied', async () => {
+  const runner = makeRunner({ code: 0, stdout: OK_LINE(), stderr: '' });
+  const dispatcher = createClaudeDispatcher({ runProcess: runner, branchPrefix: 'agent/claude-' });
+  await dispatcher.dispatchClaudeTask(baseArgs({ jobId: 'fence7-p0-task-4-1699999999' }));
+  assert.match(runner.calls[0].input, /JOB_ID[=:\s]*fence7-p0-task-4-1699999999/);
+});
