@@ -120,7 +120,12 @@ export function selectNextP0Task(plan, completedGates = []) {
     const deps = Array.isArray(task.dependsOn) ? task.dependsOn : [];
     if (deps.every((d) => done.has(d))) {
       return Object.freeze({
-        task: Object.freeze({ id: task.id, dependsOn: Object.freeze([...deps]), status: task.status ?? 'PENDING' }),
+        task: Object.freeze({
+          id: task.id,
+          dependsOn: Object.freeze([...deps]),
+          status: task.status ?? 'PENDING',
+          gate: task.gate ?? null,
+        }),
         reason: 'DEPENDENCIES_SATISFIED',
       });
     }
@@ -186,9 +191,12 @@ export function planIntegrationCycle(input = {}) {
         return { action: 'AWAIT_INTEGRATION' };
       case 'NEXT_TASK': {
         const next = selectNextP0Task(plan, completedGates);
-        return next.task
-          ? { action: 'SELECT_NEXT_TASK', taskId: next.task.id }
-          : { action: 'BACKLOG_EXHAUSTED' };
+        if (!next.task) return { action: 'BACKLOG_EXHAUSTED' };
+        // A task explicitly gated on LIVE trading or human sign-off is never
+        // auto-dispatched — the loop stops for a human decision.
+        if (next.task.gate === 'LIVE_TRADING_GATE') return { action: 'STOP_LIVE_GATE', taskId: next.task.id };
+        if (next.task.gate === 'HUMAN_APPROVAL_REQUIRED') return { action: 'STOP_HUMAN', taskId: next.task.id };
+        return { action: 'SELECT_NEXT_TASK', taskId: next.task.id };
       }
       case 'SAFETY_BLOCK':
         return { action: 'STOP_SAFETY' };

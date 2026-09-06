@@ -1,0 +1,92 @@
+# ALGOBOT Full Autonomous Orchestrator — Acceptance Evidence
+
+Spec: `docs/superpowers/specs/2026-09-06-algobot-full-autonomous-orchestrator-design.md`
+Plan: `docs/superpowers/plans/2026-09-06-algobot-full-autonomous-orchestrator.md`
+Implementation branch: `agent/autonomous-orchestrator-v1`
+Verification authority: GitHub Actions workflow **ALGOBOT Autonomous Orchestrator TDD**
+(`.github/workflows/algobot-autonomous-orchestrator-tdd.yml`).
+
+All work is strict RED → GREEN TDD. Every task pushed a RED commit (dedicated
+test, no implementation) that produced a **failing** CI run, then a GREEN commit
+that produced a **passing** CI run on the exact head SHA.
+
+## Task CI ledger (RED → GREEN, exact SHA)
+
+| Task | RED commit / run | GREEN commit / run |
+|---|---|---|
+| CI workflow bootstrap | — | `83f8ca2` |
+| 1 — deterministic state machine | `2942203` · run [34055102322](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34055102322) ✗ | `fdba09a` · run [34055797806](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34055797806) ✓ |
+| 2 — canonical GitHub reconciliation | `018d0fd` · run [34055965588](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34055965588) ✗ | `6cc1b34` · run [34056040760](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056040760) ✓ |
+| 3 — single-active lease / fencing | `f044969` · run [34056146304](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056146304) ✗ | `7ebac90` · run [34056223434](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056223434) ✓ |
+| 4 — Claude non-interactive dispatch | `0a34e74` · run [34056308379](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056308379) ✗ | `e237c5a` · run [34056372723](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056372723) ✓ |
+| 5 — CI exact-SHA gate + bounded retry | `61a7309` · run [34056420005](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056420005) ✗ | `8f123e2` · run [34056493200](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056493200) ✓ |
+| 6 — independent ChatGPT review adapter | `3d099fe` · run [34056539777](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056539777) ✗ | `8530492` · run [34056624769](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056624769) ✓ |
+| 7 — controlled P0 integration + next-task | `46ce686` · run [34056728813](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056728813) ✗ | `914a4aa` · run [34056814373](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34056814373) ✓ |
+| 8 — persistent reconciliation loop + daemon | `35aefa9` · run [34057028395](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34057028395) ✗ | `6364a15` · run [34057159662](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34057159662) ✓ |
+| 9 — failure injection + synthetic E2E | this commit (RED: 3 acceptance-surfaced gaps) | this commit (GREEN) |
+
+## Modules
+
+| File | Purpose |
+|---|---|
+| `algo/autonomous-orchestrator-state.mjs` | Pure state machine: 11 canonical states, 15 events, exact-SHA binding, idempotent replay, hard `main` rejection. |
+| `algo/autonomous-github-reconciler.mjs` | Rebuilds the actionable state from GitHub only; local cache never authoritative; crash-after-integration recovery via `isAncestor`. |
+| `algo/autonomous-orchestrator-lease.mjs` | Durable compare-and-set lease with a monotonic fence token; stale instances fenced out of assert / renew / release / guarded mutation. |
+| `algo/autonomous-claude-dispatch.mjs` | Exact-SHA task packet; injected process runner; accepts only machine-readable completion markers; never targets `main`. |
+| `algo/autonomous-ci-gate.mjs` | Exact-SHA CI classification; deterministic vs transient failure; bounded retry / escalation; no permission broadening. |
+| `algo/autonomous-review-gate.mjs` | Independent review behind an injected client; unconfigured → fail-closed stop; Claude-like / self identities rejected; every verdict exact-SHA bound. |
+| `algo/autonomous-integration-gate.mjs` | INTEGRATE only on exact-SHA GREEN + exact-SHA APPROVED into the P0 branch; dependency-ordered next-task selection; `LIVE_TRADING_GATE` / human-gated tasks stop for a human. |
+| `algo/autonomous-orchestrator-loop.mjs` | Composition. Holds no authoritative local state; every mutation fenced; graceful shutdown; terminal-state stop. |
+| `scripts/run-autonomous-orchestrator.mjs` | Thin systemd entrypoint. Default `--dry-run`; `--live` fail-closed until Task 10. |
+| `deploy/algobot-autonomous-orchestrator.service` | Hardened systemd unit; `Restart=always` + restart-storm guard; secrets only via `EnvironmentFile`. |
+
+## Acceptance criteria → evidence (spec §54)
+
+| Requirement | Where proven |
+|---|---|
+| Valid state transitions | `algo-autonomous-orchestrator-state.test.mjs` — full `TASK_READY → NEXT_TASK` path |
+| Invalid transition rejection | same — `ORCHESTRATOR_INVALID_TRANSITION` / `ORCHESTRATOR_INVALID_EVENT` |
+| Duplicate-event idempotency | same — replayed `event.id` returns the identical snapshot |
+| Exact-SHA CI binding | `...-state`, `...-ci-gate`, `...-github-reconciler`, `...-e2e` (stale GREEN never opens the gate) |
+| Stale approval rejection | `...-state`, `...-review-gate`, `...-integration-gate`, `...-e2e` (stale approval → no integration) |
+| Restart reconstruction | `...-github-reconciler`, `...-orchestrator-cycle`, `...-e2e` (fresh loop resumes from `reconcile()`) |
+| Crash-after-dispatch recovery | `...-e2e` — crash after dispatch / after CI / after the integration mutation; no duplicate side effect |
+| Single-active-orchestrator fencing | `...-orchestrator-lease`, `...-orchestrator-cycle`, `...-e2e` — stale fence token mutates nothing |
+| Bounded retry / escalation | `...-ci-gate` — deterministic fail past budget → `UNRECOVERABLE_FAILURE` |
+| CHANGES_REQUIRED → Claude | `...-integration-gate`, `...-e2e` |
+| Approval allows only P0 integration | `...-integration-gate`, `...-e2e` — target is always `agent/algobot-p0-persistent-recovery` |
+| `main` rejection | every module — construction, event, snapshot, decision target |
+| Human / LIVE-trading gates stop | `...-review-gate` (HUMAN), `...-integration-gate` + `...-e2e` (`STOP_LIVE_GATE`) |
+| One end-to-end synthetic cycle, no user relay | `...-e2e` — `E2E happy path` walks `TASK_READY → Claude → CI GREEN → independent approval → P0 integration → NEXT_TASK` with exactly one integration, never `main` |
+
+## Regression
+
+- Isolated ALGO regression suite (55 files, DB-backed P0 excluded, `--test-concurrency=1`): **369 / 369 pass**, exit 0 (local).
+- Autonomous family (`tests/algo-autonomous-*.test.mjs`): **168 / 168 pass**.
+- PostgreSQL P0 suite: unaffected by this work (no orchestrator module imports the DB layer); it is verified on its own branch/workflow.
+
+## Dry-run acceptance cycle (cannot merge P0, cannot place an order)
+
+`node scripts/run-autonomous-orchestrator.mjs --dry-run --once` →
+
+```
+{"level":"status","state":"CLAUDE_WORKING","action":"AWAIT_CLAUDE","taskId":null,"prNumber":null,"headSha":null,"ciOutcome":null,"reviewStatus":null}
+{"level":"result","status":"OK","action":"AWAIT_CLAUDE","state":"CLAUDE_WORKING"}
+```
+
+The dry-run adapters are side-effect-free: `integratePr` is logged and suppressed,
+the review client is `configured: false` (fail-closed), and `dispatchClaude`
+returns `BLOCKED / DRY_RUN`. No Bybit, no LIVE trading, no write to `main`.
+
+## Rollout status
+
+- **Phase 1 (this branch): COMPLETE for Tasks 1–9.** Synthetic + dry-run acceptance GREEN.
+- **Task 10 — controlled deployment to `algobot-bybit-01`:** requires host access
+  (runner identity, Node 22.13.0, Claude CLI auth, GitHub write scope) and a
+  configured machine-invocable independent-review endpoint. **Blocked pending the
+  human owner** — see the PR description.
+- **Task 11 — first autonomous handoff of P0 Task 3 (Executor Fencing):** runs
+  only after Task 10's smoke gate is GREEN.
+
+**No autonomous change has been merged to `agent/algobot-p0-persistent-recovery`
+or `main`. No real Bybit order has been placed.**

@@ -24,7 +24,9 @@ const STOP_ACTIONS = new Set([
   'STOP_SAFETY',
   'STOP_UNRECOVERABLE',
   'STOP_HUMAN',
+  'STOP_LIVE_GATE',
   'STOP_NO_INDEPENDENT_REVIEW',
+  'STOP_PERMISSION',
   'BACKLOG_EXHAUSTED',
 ]);
 
@@ -99,7 +101,11 @@ export function createOrchestratorLoop(config = {}) {
     try {
       return await reviewGate.fetchReviewOutcome(reconciled.reviewRequestId ?? 'pending', reconciled.headSha);
     } catch (error) {
-      if (/STALE_EVIDENCE|MALFORMED|SELF_SUBSTITUTION/.test(error.message)) throw error;
+      // A verdict signed by a self / Claude-like identity is a real safety
+      // problem — surface it. A stale-SHA or malformed verdict is simply "no
+      // usable review yet"; keep waiting rather than crashing the daemon.
+      if (/SELF_SUBSTITUTION/.test(error.message)) throw error;
+      if (/STALE_EVIDENCE/.test(error.message)) return { status: 'STALE', reason: 'REVIEW_STALE_FOR_HEAD' };
       return { status: 'PENDING' };
     }
   }
