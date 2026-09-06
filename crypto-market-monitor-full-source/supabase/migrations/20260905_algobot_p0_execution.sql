@@ -123,6 +123,9 @@ begin
   end if;
 
   if exists (select 1 from public.canary_reservations where order_link_id = p_order_link_id) then
+    -- canary_reservations.order_link_id already has a unique constraint, so
+    -- this check is intentionally redundant with it: it turns what would
+    -- otherwise be an opaque unique-violation error into a clear message.
     raise exception 'a CANARY reservation already exists for order_link_id %', p_order_link_id;
   end if;
 
