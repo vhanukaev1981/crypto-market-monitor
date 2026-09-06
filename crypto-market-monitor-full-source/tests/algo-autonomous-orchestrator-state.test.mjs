@@ -300,3 +300,31 @@ test('rejects a snapshot whose integrationBranch was tampered to main', () => {
     /ORCHESTRATOR_SAFETY_VIOLATION/,
   );
 });
+
+// ---------------------------------------------------------------------------
+// ChatGPT PR #19 review — Codex P2 (autonomous-orchestrator-state.mjs:331):
+// duplicate-event idempotency must hold for ANY retained event id, not only
+// the immediately previous one.
+// ---------------------------------------------------------------------------
+
+test('a delayed duplicate of an OLDER processed event id is still an idempotent no-op', () => {
+  const machine = makeMachine();
+  let snap = freshSnapshot(machine);
+  const evA = { id: 'evt-A', type: 'CLAUDE_DISPATCHED', baseSha: SHA_A };
+  const evB = { id: 'evt-B', type: 'CLAUDE_READY_FOR_CI', headSha: SHA_A };
+  snap = machine.transition(snap, evA); // CLAUDE_WORKING
+  snap = machine.transition(snap, evB); // CI_RUNNING
+  const replayed = machine.transition(snap, evA); // delayed duplicate of A (not the last event)
+  assert.equal(replayed, snap, 'duplicate of a non-last processed event must be a no-op');
+  assert.equal(replayed.state, 'CI_RUNNING');
+});
+
+test('processed event ids are retained (bounded) and exposed for durable reconciliation', () => {
+  const machine = makeMachine();
+  let snap = freshSnapshot(machine);
+  snap = machine.transition(snap, { id: 'e1', type: 'CLAUDE_DISPATCHED', baseSha: SHA_A });
+  snap = machine.transition(snap, { id: 'e2', type: 'CLAUDE_READY_FOR_CI', headSha: SHA_A });
+  assert.ok(Array.isArray(snap.processedEventIds));
+  assert.ok(snap.processedEventIds.includes('e1'));
+  assert.ok(snap.processedEventIds.includes('e2'));
+});

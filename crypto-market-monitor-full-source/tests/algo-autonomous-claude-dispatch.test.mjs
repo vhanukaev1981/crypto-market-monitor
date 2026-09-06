@@ -182,3 +182,22 @@ test('no process argument or packet line is allowed to equal a protected branch'
     assert.notEqual(arg, 'master');
   }
 });
+
+// ---------------------------------------------------------------------------
+// ChatGPT PR #19 review — Codex P2 (autonomous-claude-dispatch.mjs:156):
+// a syntactically valid completion marker on a NONZERO exit must be rejected —
+// the worker invocation did not succeed.
+// ---------------------------------------------------------------------------
+
+test('a valid completion marker on a nonzero exit is rejected (worker did not succeed)', async () => {
+  const dispatcher = dispatcherWith({ code: 1, stdout: OK_LINE(), stderr: 'git push failed after tests passed' });
+  await assert.rejects(
+    () => dispatcher.dispatchClaudeTask(baseArgs()),
+    /ORCHESTRATOR_DISPATCH_FAILED/,
+  );
+});
+
+test('a BLOCKED marker on a nonzero exit is also rejected — a clean block exits 0', async () => {
+  const dispatcher = dispatcherWith({ code: 137, stdout: 'ALGOBOT_COMPLETION_JSON: {"completion":"BLOCKED","reason":"oom"}', stderr: 'Killed' });
+  await assert.rejects(() => dispatcher.dispatchClaudeTask(baseArgs()), /ORCHESTRATOR_DISPATCH_FAILED/);
+});

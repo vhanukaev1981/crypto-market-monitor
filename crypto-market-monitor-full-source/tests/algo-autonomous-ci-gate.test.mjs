@@ -148,3 +148,26 @@ test('rejects malformed input (fail closed)', () => {
   assert.throws(() => evaluateCiGate({ headSha: HEAD, requiredChecks: CHECKS, runs: 'nope', attempt: 1 }), /ORCHESTRATOR_CI_GATE_INVALID_INPUT/);
   assert.throws(() => evaluateCiGate({ headSha: HEAD, requiredChecks: CHECKS, runs: [], attempt: 0 }), /ORCHESTRATOR_CI_GATE_INVALID_INPUT/);
 });
+
+// ---------------------------------------------------------------------------
+// ChatGPT PR #19 review: CI selection must use authoritative ordering
+// (completedAt/startedAt timestamp, then runId), not array position.
+// ---------------------------------------------------------------------------
+
+test('the authoritative latest run is chosen by timestamp, not array order', () => {
+  const runs = [
+    { name: CHECKS[0], headSha: HEAD, status: 'completed', conclusion: 'success', runId: 'r2', startedAt: '2026-09-06T02:00:00Z' },
+    { name: CHECKS[0], headSha: HEAD, status: 'completed', conclusion: 'failure', runId: 'r1', startedAt: '2026-09-06T01:00:00Z' }, // older, but later in the array
+    { name: CHECKS[1], headSha: HEAD, status: 'completed', conclusion: 'success', runId: 'r3', startedAt: '2026-09-06T03:00:00Z' },
+  ];
+  assert.equal(evalGate({ runs }).outcome, 'GREEN');
+});
+
+test('with no timestamps the higher numeric runId wins deterministically', () => {
+  const runs = [
+    { name: CHECKS[0], headSha: HEAD, status: 'completed', conclusion: 'failure', runId: '4290000099' },
+    { name: CHECKS[0], headSha: HEAD, status: 'completed', conclusion: 'success', runId: '4290000100' },
+    { name: CHECKS[1], headSha: HEAD, status: 'completed', conclusion: 'success', runId: '5' },
+  ];
+  assert.equal(evalGate({ runs }).outcome, 'GREEN');
+});
