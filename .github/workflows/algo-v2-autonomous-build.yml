@@ -1,5 +1,12 @@
 name: ALGO V2 Autonomous Build
 
+# NOTE (Task 8, autonomous orchestrator): the persistent systemd daemon
+# `algobot-autonomous-orchestrator` on algobot-bybit-01 is now the PRIMARY
+# scheduler for the P0 pipeline. This hourly workflow is retained only as a
+# verification / heartbeat: it runs the orchestrator + legacy planner regression
+# and publishes an auditable status artifact. It performs no autonomous
+# integration and remains `permissions: contents: read`.
+
 on:
   workflow_dispatch:
   push:
@@ -46,6 +53,16 @@ jobs:
           tests/algo-autonomous-permission-boundary.test.mjs
           tests/algo-autonomous-build-cycle.test.mjs
 
+      - name: Verify autonomous orchestrator modules (heartbeat)
+        run: node --test --test-concurrency=1 tests/algo-autonomous-orchestrator-*.test.mjs tests/algo-autonomous-github-reconciler.test.mjs tests/algo-autonomous-claude-dispatch.test.mjs tests/algo-autonomous-ci-gate.test.mjs tests/algo-autonomous-review-gate.test.mjs tests/algo-autonomous-integration-gate.test.mjs
+
+      - name: Orchestrator dry-run heartbeat tick
+        run: |
+          mkdir -p validation/autonomous-build-artifacts
+          node scripts/run-autonomous-orchestrator.mjs --dry-run --once \
+            > validation/autonomous-build-artifacts/orchestrator-heartbeat.json || true
+          cat validation/autonomous-build-artifacts/orchestrator-heartbeat.json
+
       - name: Produce fail-closed cycle decision
         run: |
           HEAD_SHA="$(git rev-parse HEAD)"
@@ -63,6 +80,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: algo-v2-autonomous-cycle-${{ github.run_id }}
-          path: crypto-market-monitor-full-source/validation/autonomous-build-artifacts/cycle-plan.json
+          path: |
+            crypto-market-monitor-full-source/validation/autonomous-build-artifacts/cycle-plan.json
+            crypto-market-monitor-full-source/validation/autonomous-build-artifacts/orchestrator-heartbeat.json
           if-no-files-found: error
           retention-days: 14

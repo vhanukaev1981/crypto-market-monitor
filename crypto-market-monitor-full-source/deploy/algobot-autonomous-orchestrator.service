@@ -1,0 +1,61 @@
+# systemd unit for the ALGOBOT autonomous orchestrator daemon on algobot-bybit-01.
+#
+# Install (as root):
+#   cp deploy/algobot-autonomous-orchestrator.service /etc/systemd/system/
+#   install -m 600 -o algobot -g algobot /dev/null /etc/algobot/orchestrator.env   # then populate
+#   systemctl daemon-reload
+#   systemctl enable --now algobot-autonomous-orchestrator
+#
+# Secrets (GITHUB_TOKEN, review endpoint credentials, ...) live ONLY in
+# /etc/algobot/orchestrator.env, which is NOT committed. Until the Task 10
+# smoke gate is GREEN, keep ALGOBOT_ORCHESTRATOR_ARGS="--dry-run".
+
+[Unit]
+Description=ALGOBOT Autonomous Orchestrator (P0 pipeline daemon)
+Documentation=file:///opt/algobot/crypto-market-monitor/docs/superpowers/specs/2026-09-06-algobot-full-autonomous-orchestrator-design.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=algobot
+Group=algobot
+WorkingDirectory=/opt/algobot/crypto-market-monitor/crypto-market-monitor-full-source
+EnvironmentFile=/etc/algobot/orchestrator.env
+# Default to the safe mode; override ALGOBOT_ORCHESTRATOR_ARGS in the env file.
+Environment=ALGOBOT_ORCHESTRATOR_ARGS=--dry-run
+ExecStart=/usr/bin/node scripts/run-autonomous-orchestrator.mjs $ALGOBOT_ORCHESTRATOR_ARGS
+
+Restart=always
+RestartSec=15
+# Restart storm guard: if it dies >5 times in 5 min, stop and wait for a human.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Graceful shutdown: the loop handles SIGTERM and exits between ticks.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+# Hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/algobot/crypto-market-monitor
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=algobot-orchestrator
+
+[Install]
+WantedBy=multi-user.target
