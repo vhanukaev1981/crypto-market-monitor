@@ -62,6 +62,10 @@ function fail(code, detail) {
   throw new Error(detail ? `${code}: ${detail}` : code);
 }
 
+function isNonEmptyString(v) {
+  return typeof v === 'string' && v.trim().length > 0;
+}
+
 function abortableDelay(ms, signal) {
   return new Promise((resolve) => {
     if (signal && signal.aborted) return resolve();
@@ -96,6 +100,7 @@ export function createOrchestratorLoop(config = {}) {
     bootstrap = {},
     renewLease: renewLeaseEnabled = true,
     maxAttempts = 3,
+    dispatchTtlMs = 90 * 60 * 1000,
   } = config;
 
   if (typeof integrationBranch !== 'string' || !integrationBranch.trim()) {
@@ -132,8 +137,8 @@ export function createOrchestratorLoop(config = {}) {
       return { error: 'UNAVAILABLE', message: error.message };
     }
     const runtime = (blob && blob.runtime && typeof blob.runtime === 'object')
-      ? { reviewRequestId: null, reviewRequestSha: null, pendingReviewFor: null, ...blob.runtime }
-      : { reviewRequestId: null, reviewRequestSha: null, pendingReviewFor: null };
+      ? { reviewRequestId: null, reviewRequestSha: null, pendingReviewFor: null, dispatch: null, ...blob.runtime }
+      : { reviewRequestId: null, reviewRequestSha: null, pendingReviewFor: null, dispatch: null };
     if (blob && blob.snapshot) {
       try {
         machine.validateSnapshot(blob.snapshot);
@@ -262,21 +267,46 @@ export function createOrchestratorLoop(config = {}) {
     const requestId = (runtime.reviewRequestId && runtime.reviewRequestSha === reconciled.headSha)
       ? runtime.reviewRequestId
       : null;
+    // "maybeAccepted": we persisted the submit intent for this head but crashed
+    // before recording the id — a request may already exist on the endpoint.
+    const maybeAccepted = runtime.pendingReviewFor === reconciled.headSha;
+    // The reconciler already observed a verdict on GitHub for this state.
+    const observed = reconciled.evidence && reconciled.evidence.review;
+    const observedUsable = observed && observed.matchesHead
+      && ['APPROVED_FOR_INTEGRATION', 'CHANGES_REQUIRED', 'HUMAN_APPROVAL_REQUIRED'].includes(observed.verdict);
+
+    if (reconciled.derivedState === 'APPROVED_FOR_INTEGRATION' && observedUsable) {
+      return { status: 'COMPLETE', evidence: { ...observed } };
+    }
+
+    // READY_FOR_CHATGPT_REVIEW: never poll with a synthetic id before a request
+    // could exist — that is what the fresh Copilot finding flags.
+    if (reconciled.derivedState === 'READY_FOR_CHATGPT_REVIEW'
+      && !requestId && !maybeAccepted && !observedUsable) {
+      return { status: 'NEEDS_REQUEST' };
+    }
+    if (observedUsable) return { status: 'COMPLETE', evidence: { ...observed } };
+
     try {
-      // Always ask the gate: a real client keys outcomes by PR + exact SHA and
-      // can answer before we have persisted a request id (e.g. after a restart,
-      // or when the reconciler already observed the verdict on GitHub).
       const outcome = await reviewGate.fetchReviewOutcome(requestId || 'pending', reconciled.headSha);
+      if (outcome && isNonEmptyString(outcome.requestId) && !requestId) {
+        // Adopt the id the endpoint already holds — never re-submit.
+        runtime.reviewRequestId = outcome.requestId;
+        runtime.reviewRequestSha = reconciled.headSha;
+      }
       if (outcome && ['COMPLETE', 'MALFORMED', 'ERROR', 'NO_INDEPENDENT_REVIEWER'].includes(outcome.status)) {
         return outcome;
       }
-      // null / PENDING: only submit a fresh request when we have not already.
-      return requestId ? { status: 'PENDING' } : { status: 'NEEDS_REQUEST' };
+      return (requestId || (outcome && isNonEmptyString(outcome.requestId)))
+        ? { status: 'PENDING' }
+        : { status: 'NEEDS_REQUEST' };
     } catch (error) {
       if (SELF_SUB_RE.test(error.message)) throw error; // real safety problem
       if (REVIEW_MALFORMED_RE.test(error.message)) return { status: 'MALFORMED', failClosed: true, error: error.message };
       if (REVIEW_STALE_RE.test(error.message)) return { status: 'STALE', reason: 'REVIEW_STALE_FOR_HEAD' };
-      // auth / permission / unknown -> fail closed, do NOT loop silently.
+      // An error polling a request that MIGHT already exist: keep waiting rather
+      // than re-submitting or hard-stopping.
+      if (maybeAccepted && !requestId) return { status: 'PENDING' };
       return { status: 'ERROR', failClosed: true, error: error.message };
     }
   }
@@ -337,11 +367,21 @@ export function createOrchestratorLoop(config = {}) {
         break;
       }
       case 'DISPATCH_CLAUDE':
-      case 'RETURN_TO_CLAUDE':
-        if (typeof dispatchClaude === 'function') {
-          await runMutator(() => dispatchClaude({ reconciled, attempt: snapshot.attempt, mode: decision.action }));
-        }
+      case 'RETURN_TO_CLAUDE': {
+        if (typeof dispatchClaude !== 'function') break;
+        const taskId = reconciled.taskId || snapshot.taskId;
+        const branch = reconciled.branch || snapshot.branch;
+        // RETURN_TO_CLAUDE is a fresh attempt: clear any stale dispatch marker.
+        if (decision.action === 'RETURN_TO_CLAUDE') runtime.dispatch = null;
+        const d = runtime.dispatch;
+        const ageMs = d && d.at ? Date.parse(now()) - Date.parse(d.at) : Infinity;
+        const active = d && d.taskId === taskId && d.branch === branch && Number.isFinite(ageMs) && ageMs < dispatchTtlMs;
+        if (active) break; // already kicked off for this task/branch and still within TTL
+        await runMutator(() => dispatchClaude({ reconciled, attempt: snapshot.attempt, mode: decision.action }));
+        runtime.dispatch = { taskId, branch, at: now(), fenceToken, attempt: snapshot.attempt };
+        if (ctx && typeof ctx.persist === 'function') await ctx.persist();
         break;
+      }
       case 'RECORD_APPROVAL':
         if (typeof mutators.recordApproval === 'function') {
           const ev = reviewOutcome && reviewOutcome.evidence ? reviewOutcome.evidence : {};
@@ -420,10 +460,14 @@ export function createOrchestratorLoop(config = {}) {
     try {
       reconciled = await reconcile();
     } catch (error) {
-      const transient = TRANSIENT_RE.test(error.message);
       if (typeof mutators.postStatus === 'function') {
         try { await mutators.postStatus({ state: 'RECONCILE_ERROR', action: null, at: now(), error: error.message }); } catch { /* best effort */ }
       }
+      // Auth failures are NOT transient — stop fail-closed.
+      if (/ADAPTER_AUTH|\bpermission\b|\b401\b|\b403\b/i.test(error.message)) {
+        return Object.freeze({ status: 'STOPPED', action: 'STOP_PERMISSION', error: error.message });
+      }
+      const transient = TRANSIENT_RE.test(error.message);
       return Object.freeze({ status: transient ? 'TRANSIENT_ERROR' : 'ERROR', retry: transient, action: null, error: error.message });
     }
 

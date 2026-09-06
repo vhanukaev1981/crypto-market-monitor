@@ -323,8 +323,10 @@ test('run() stops the daemon when the lease is lost and cannot be re-acquired', 
 
 test('a malformed review verdict fails closed (STOP_REVIEW_MALFORMED), no mutation', async () => {
   const mutators = makeMutators();
+  const seeded = memStateStore();
+  await seeded.save({ snapshot: createOrchestratorStateMachine({ integrationBranch: INTEGRATION_BRANCH }).createInitialSnapshot({ repository: REPO, taskId: 'p0-task-3', branch: CLAUDE_BRANCH }), runtime: { reviewRequestId: 'rr-seed', reviewRequestSha: HEAD, pendingReviewFor: HEAD, dispatch: null } });
   const loop = durableLoop({
-    mutators,
+    mutators, stateStore: seeded,
     reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
     evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
     reviewGate: { configured: true, async requestIndependentReview() { return { status: 'REQUESTED', requestId: 'x' }; }, async fetchReviewOutcome() { throw new Error('ORCHESTRATOR_REVIEW_MALFORMED_VERDICT: got approve'); } },
@@ -335,7 +337,10 @@ test('a malformed review verdict fails closed (STOP_REVIEW_MALFORMED), no mutati
 });
 
 test('a review-client auth/permission failure fails closed (STOP_REVIEW_ERROR), not silent PENDING', async () => {
+  const seeded = memStateStore();
+  await seeded.save({ snapshot: createOrchestratorStateMachine({ integrationBranch: INTEGRATION_BRANCH }).createInitialSnapshot({ repository: REPO, taskId: 'p0-task-3', branch: CLAUDE_BRANCH }), runtime: { reviewRequestId: 'rr-seed', reviewRequestSha: HEAD, pendingReviewFor: HEAD, dispatch: null } });
   const loop = durableLoop({
+    stateStore: seeded,
     reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
     evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
     reviewGate: { configured: true, async requestIndependentReview() { return { status: 'REQUESTED', requestId: 'x' }; }, async fetchReviewOutcome() { throw new Error('HTTP 403 Forbidden: token lacks scope'); } },
@@ -481,7 +486,7 @@ test('R4: an APPROVED verdict is written as canonical evidence via recordApprova
   const mutators = { ...makeMutators(), async recordApproval(a) { calls.push(a); } };
   const loop = durableLoop({
     mutators,
-    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' } } }),
+    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' }, review: { verdict: 'APPROVED_FOR_INTEGRATION', sha: HEAD, reviewerId: 'chatgpt-independent', matchesHead: true } } }),
     evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
     reviewGate: fakeReviewGate({ status: 'COMPLETE', evidence: { verdict: 'APPROVED_FOR_INTEGRATION', sha: HEAD, reviewerId: 'chatgpt-independent' } }),
   });
@@ -562,7 +567,7 @@ test('B4: crash after an accepted submit -> next tick polls + adopts, never re-s
   let saves = 0;
   const crashingStore = {
     async load() { return store._peek(); },
-    async save(b) { saves += 1; if (saves === 2) throw new Error("crash before id persisted"); await store.save(b); },
+    async save(b) { saves += 1; if (saves === 3) throw new Error("crash before id persisted"); await store.save(b); },
   };
   const base = {
     stateStore: crashingStore,

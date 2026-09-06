@@ -68,7 +68,10 @@ async function guarded(label, thunk) {
     return await thunk();
   } catch (error) {
     if (error && typeof error.message === 'string'
-      && (error.message.startsWith(ERR.SAFETY) || error.message.startsWith(ERR.INPUT))) {
+      && (error.message.startsWith(ERR.SAFETY)
+        || error.message.startsWith(ERR.INPUT)
+        || error.message.startsWith('ORCHESTRATOR_ADAPTER_AUTH'))) {
+      // auth failures are not transient — surface, do not wrap as RECONCILE_FAILED.
       throw error;
     }
     const detail = error && error.message ? error.message : String(error);
