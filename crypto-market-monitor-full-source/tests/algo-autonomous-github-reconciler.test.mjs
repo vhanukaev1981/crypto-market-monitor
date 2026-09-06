@@ -303,3 +303,12 @@ test('a merged PR is durable evidence of integration (ledger not required)', asy
   const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger() });
   assert.equal(r.derivedState, 'NEXT_TASK');
 });
+
+// ChatGPT PR #19 re-review 3 (Copilot reconciler:127/176): the reconciled
+// result must expose the integration-branch head SHA — next-task branch
+// creation bases the fresh Claude branch on the POST-integration head.
+test('the reconciled result exposes integrationHead', async () => {
+  const gh = ghWithIntegration();
+  const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger() });
+  assert.equal(r.integrationHead, INTEG_HEAD);
+});

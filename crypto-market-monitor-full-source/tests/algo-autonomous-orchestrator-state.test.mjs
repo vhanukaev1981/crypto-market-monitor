@@ -328,3 +328,19 @@ test('processed event ids are retained (bounded) and exposed for durable reconci
   assert.ok(snap.processedEventIds.includes('e1'));
   assert.ok(snap.processedEventIds.includes('e2'));
 });
+
+// ChatGPT PR #19 re-review 3 (Copilot): SHA fields must be full 40-hex, not any
+// non-empty string.
+test('CLAUDE_DISPATCHED / CLAUDE_READY_FOR_CI reject a non-40-hex SHA', () => {
+  const machine = makeMachine();
+  const snap = freshSnapshot(machine);
+  assert.throws(
+    () => machine.transition(snap, { id: 'e-bad-sha', type: 'CLAUDE_DISPATCHED', baseSha: 'not-a-sha' }),
+    /ORCHESTRATOR_INVALID_EVENT/,
+  );
+  const working = machine.transition(snap, { id: 'e-ok', type: 'CLAUDE_DISPATCHED', baseSha: SHA_A });
+  assert.throws(
+    () => machine.transition(working, { id: 'e-bad2', type: 'CLAUDE_READY_FOR_CI', headSha: 'deadbeef' }),
+    /ORCHESTRATOR_INVALID_EVENT/,
+  );
+});

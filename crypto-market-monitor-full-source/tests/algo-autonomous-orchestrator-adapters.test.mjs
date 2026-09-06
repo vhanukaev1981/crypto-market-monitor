@@ -352,3 +352,110 @@ test('createClaudeCliRunner({ detached: true }) kicks off and returns immediatel
   assert.equal(result.pid, 4242);
   assert.equal(spawnedOpts.detached, true);
 });
+
+// ===========================================================================
+// ChatGPT PR #19 re-review 3 (CHANGES_REQUIRED on f8af197) — Commit I.
+// B5: integratePr must re-fetch the PR and prove base==target, state==open,
+//     head==headSha before merging (TOCTOU) and fence at commit time.
+// B7: createBranchRef must reject a pre-existing branch whose head != baseSha.
+// B3: getReviewVerdict must also consume the CANONICAL control-branch review
+//     evidence file (where recordApproval writes), keeping reviewerId.
+// Copilot: getOpenPullRequest must ignore closed/merged PRs; task ids are
+//     `p0-task-<n>-<slug>`.
+// ===========================================================================
+
+const CTRL_I = 'ops/algobot-orchestrator-control';
+const FULL_A = 'a'.repeat(40);
+const FULL_B = 'b'.repeat(40);
+
+function ilog(routes) {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    const method = init.method || 'GET';
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ url, method, body });
+    for (const [pat, h] of routes) if (url.includes(pat)) return typeof h === 'function' ? h(url, init, { method, body }) : h;
+    return jsonResponse({ message: 'nf' }, { status: 404 });
+  };
+  fetchImpl.calls = calls;
+  return fetchImpl;
+}
+
+test('B5: integratePr aborts if the PR live base no longer equals the target', async () => {
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CTRL_I, fetchImpl: ilog([
+    ['/pulls/7', jsonResponse({ number: 7, state: 'open', base: { ref: 'main' }, head: { sha: FULL_A } })],
+    ['/pulls/7/merge', jsonResponse({ merged: true })],
+  ]) });
+  await assert.rejects(
+    () => gh.integratePr({ prNumber: 7, headSha: FULL_A, target: 'agent/algobot-p0-persistent-recovery' }),
+    /ORCHESTRATOR_SAFETY_VIOLATION|base/i,
+  );
+});
+
+test('B5: integratePr aborts if the PR head no longer equals the expected SHA', async () => {
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CTRL_I, fetchImpl: ilog([
+    ['/pulls/7', jsonResponse({ number: 7, state: 'open', base: { ref: 'agent/algobot-p0-persistent-recovery' }, head: { sha: FULL_B } })],
+    ['/pulls/7/merge', jsonResponse({ merged: true })],
+  ]) });
+  await assert.rejects(
+    () => gh.integratePr({ prNumber: 7, headSha: FULL_A, target: 'agent/algobot-p0-persistent-recovery', taskId: 'p0-task-3' }),
+    /head|SHA|exact/i,
+  );
+});
+
+test('B5: integratePr merges only after the live PR base + head + open state check passes', async () => {
+  const fetchImpl = ilog([
+    ['/pulls/7/merge', (u, i, { method }) => (method === 'PUT' ? jsonResponse({ merged: true }) : jsonResponse({}, { status: 404 }))],
+    ['/pulls/7', jsonResponse({ number: 7, state: 'open', base: { ref: 'agent/algobot-p0-persistent-recovery' }, head: { sha: FULL_A } })],
+    ['/contents/', (u, i, { method }) => (method === 'GET' ? jsonResponse({ message: 'nf' }, { status: 404 }) : jsonResponse({}))],
+  ]);
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CTRL_I, fetchImpl });
+  await gh.integratePr({ prNumber: 7, headSha: FULL_A, target: 'agent/algobot-p0-persistent-recovery', taskId: 'p0-task-3' });
+  assert.ok(fetchImpl.calls.some((c) => c.method === 'PUT' && c.url.includes('/pulls/7/merge')));
+});
+
+test('B7: createBranchRef rejects a pre-existing branch whose head differs from baseSha', async () => {
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CTRL_I, fetchImpl: ilog([
+    ['/git/refs', jsonResponse({ message: 'Reference already exists' }, { status: 422 })],
+    ['/git/ref/heads/agent%2Fclaude-p0-task-4-x', jsonResponse({ object: { sha: FULL_B } })],
+  ]) });
+  await assert.rejects(
+    () => gh.createBranchRef('agent/claude-p0-task-4-x', FULL_A),
+    /ORCHESTRATOR_STALE_TASK_BRANCH|stale|differs/i,
+  );
+});
+
+test('B7: createBranchRef is benign when the pre-existing branch head already equals baseSha', async () => {
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CTRL_I, fetchImpl: ilog([
+    ['/git/refs', jsonResponse({ message: 'Reference already exists' }, { status: 422 })],
+    ['/git/ref/heads/agent%2Fclaude-p0-task-4-x', jsonResponse({ object: { sha: FULL_A } })],
+  ]) });
+  const out = await gh.createBranchRef('agent/claude-p0-task-4-x', FULL_A);
+  assert.equal(out.created, false);
+});
+
+test('B3: getReviewVerdict consumes the canonical control-branch review-evidence file', async () => {
+  const evidence = { records: [{ kind: 'verdict', verdict: 'APPROVED_FOR_INTEGRATION', sha: FULL_A, reviewerId: 'chatgpt-independent', at: 't' }] };
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CTRL_I, trustedReviewers: ['chatgpt-independent'], fetchImpl: ilog([
+    ['/contents/autonomous-review-evidence.json', jsonResponse({ content: Buffer.from(JSON.stringify(evidence)).toString('base64'), sha: 'x' })],
+    ['/issues/19/comments', jsonResponse([])],
+  ]) });
+  const v = await gh.getReviewVerdict(19);
+  assert.equal(v.verdict, 'APPROVED_FOR_INTEGRATION');
+  assert.equal(v.sha, FULL_A);
+  assert.equal(v.reviewerId, 'chatgpt-independent');
+});
+
+test('Copilot: getOpenPullRequest ignores a closed/merged historical PR', async () => {
+  const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CTRL_I, fetchImpl: ilog([
+    ['/pulls?', jsonResponse([{ number: 3, state: 'closed', merged_at: '2026-01-01', head: { sha: FULL_A, ref: 'agent/claude-x' }, base: { ref: 'agent/algobot-p0-persistent-recovery' } }])],
+  ]) });
+  const pr = await gh.getOpenPullRequest({ headBranch: 'agent/claude-x', baseBranch: 'agent/algobot-p0-persistent-recovery' });
+  assert.equal(pr, null, 'a closed/merged PR is not the current open PR');
+});
+
+test('Copilot: parseP0Plan ids use the p0-task-<n> convention', () => {
+  const plan = parseP0Plan('### Task 3 — Executor Fencing\n### Task 4 — Live canary');
+  assert.match(plan.tasks[0].id, /^p0-task-3-/);
+  assert.match(plan.tasks[1].id, /^p0-task-4-/);
+});
