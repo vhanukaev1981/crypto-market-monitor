@@ -330,3 +330,25 @@ test('I-c: parseP0Plan detects DONE from strikethrough / bold / status hint', ()
   assert.equal(plan.tasks[1].status, 'DONE');
   assert.equal(plan.tasks[2].status, 'PENDING');
 });
+
+// ---------------------------------------------------------------------------
+// ChatGPT PR #19 re-review 2 — Commit H (R2 remainder): a long-running Claude
+// dispatch must NOT be held open inside a fenced mutation for the whole run
+// (lease TTL << Claude runtime). The runner supports a detached kick-off that
+// returns immediately.
+// ---------------------------------------------------------------------------
+
+test('createClaudeCliRunner({ detached: true }) kicks off and returns immediately', async () => {
+  let spawnedOpts = null;
+  const spawnImpl = (cmd, args, opts) => {
+    spawnedOpts = opts;
+    return { unref() {}, on() {}, stdout: { on() {} }, stderr: { on() {} }, stdin: { write() {}, end() {} }, pid: 4242 };
+  };
+  const run = createClaudeCliRunner({ claudeBin: 'claude', spawnImpl, detached: true });
+  const t0 = Date.now();
+  const result = await run({ command: 'claude', args: ['-p'], input: 'packet', timeoutMs: 300 });
+  assert.ok(Date.now() - t0 < 200, 'must not block on the child');
+  assert.equal(result.detached, true);
+  assert.equal(result.pid, 4242);
+  assert.equal(spawnedOpts.detached, true);
+});
