@@ -155,11 +155,15 @@ test('inconsistent branch/PR SHA -> fail closed to CLAUDE_WORKING, evidence mark
   assert.ok(r.reasons.includes('BRANCH_PR_SHA_MISMATCH'));
 });
 
-test('crash-after-integration recovery: head already absorbed by integration branch -> NEXT_TASK', async () => {
-  const gh = fakeGithub({ ancestors: { [`${HEAD}->${INTEGRATION_BRANCH}`]: true } });
-  const r = await reconcile(gh);
+test('crash-after-integration recovery: durable evidence + verified integration head -> NEXT_TASK', async () => {
+  const gh = ghWithIntegration({
+    pr: { number: 77, headSha: HEAD, headRef: TASK.branch, baseRef: INTEGRATION_BRANCH, state: 'closed', merged: true },
+    ancestors: { [`${HEAD}->${INTEGRATION_BRANCH}`]: true },
+    ciBySha: { [INTEG_HEAD]: { sha: INTEG_HEAD, state: 'GREEN', runId: 'run-integ' } },
+  });
+  const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger([TASK.id]) });
   assert.equal(r.derivedState, 'NEXT_TASK');
-  assert.ok(r.reasons.includes('ALREADY_INTEGRATED'));
+  assert.ok(r.reasons.includes('INTEGRATED_AND_VERIFIED'));
 });
 
 test('duplicate observations are idempotent — same inputs give a deep-equal result', async () => {
@@ -208,4 +212,89 @@ test('does not call CI/review lookups once the branch is already integrated', as
   await reconcile(gh);
   assert.equal(gh._calls.getCiStatus, 0);
   assert.equal(gh._calls.getReviewVerdict, 0);
+});
+
+// ---------------------------------------------------------------------------
+// ChatGPT PR #19 review — blocker 3 (post-integration verification) and
+// Codex P1 (reconciler:149): ancestry alone must NOT mean "integrated".
+//   * a fresh task branch still at the integration head is NOT integrated
+//   * "already integrated" requires durable evidence (merged PR or ledger)
+//   * NEXT_TASK requires exact-SHA GREEN on the integration branch head
+// ---------------------------------------------------------------------------
+
+const INTEG_HEAD = 'g'.repeat(40);
+
+function ghWithIntegration(overrides = {}) {
+  const gh = fakeGithub({
+    branchHeads: { [TASK.branch]: HEAD, [INTEGRATION_BRANCH]: INTEG_HEAD },
+    ...overrides,
+  });
+  // getCiStatus answers per-sha in this variant (head vs integration head).
+  const ciBySha = overrides.ciBySha ?? { [HEAD]: { sha: HEAD, state: 'GREEN', runId: 'run-h' } };
+  gh.getCiStatus = async (sha) => {
+    gh._calls.getCiStatus += 1;
+    return ciBySha[sha] ?? { sha: null, state: 'NONE', runId: null };
+  };
+  return gh;
+}
+
+function fakeLedger(integratedTaskIds = []) {
+  const set = new Set(integratedTaskIds);
+  return {
+    async hasIntegratedTask(taskId) { return set.has(taskId); },
+    async getIntegratedHead(taskId) { return set.has(taskId) ? HEAD : null; },
+  };
+}
+
+test('a fresh task branch still pointing at the integration head is NOT treated as integrated', async () => {
+  const gh = ghWithIntegration({
+    branchHeads: { [TASK.branch]: INTEG_HEAD, [INTEGRATION_BRANCH]: INTEG_HEAD },
+    pr: null,
+    ancestors: { [`${INTEG_HEAD}->${INTEGRATION_BRANCH}`]: true },
+  });
+  const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger() });
+  assert.notEqual(r.derivedState, 'NEXT_TASK');
+  assert.ok(['CLAUDE_WORKING', 'TASK_READY'].includes(r.derivedState), r.derivedState);
+  assert.ok(r.reasons.some((x) => /NO_COMMITS|AT_BASE/.test(x)), JSON.stringify(r.reasons));
+});
+
+test('ancestry true but NO merged PR and NO ledger entry does NOT claim NEXT_TASK (fail closed)', async () => {
+  const gh = ghWithIntegration({
+    pr: null,
+    ancestors: { [`${HEAD}->${INTEGRATION_BRANCH}`]: true },
+  });
+  const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger() });
+  assert.notEqual(r.derivedState, 'NEXT_TASK');
+});
+
+test('durable ledger entry + ancestry + exact-SHA GREEN on the integration head -> NEXT_TASK', async () => {
+  const gh = ghWithIntegration({
+    pr: null,
+    ancestors: { [`${HEAD}->${INTEGRATION_BRANCH}`]: true },
+    ciBySha: { [INTEG_HEAD]: { sha: INTEG_HEAD, state: 'GREEN', runId: 'run-integ' } },
+  });
+  const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger([TASK.id]) });
+  assert.equal(r.derivedState, 'NEXT_TASK');
+  assert.ok(r.reasons.includes('INTEGRATED_AND_VERIFIED'));
+});
+
+test('durable integration but the integration head CI is not yet GREEN -> INTEGRATING (post-integration verify)', async () => {
+  const gh = ghWithIntegration({
+    pr: null,
+    ancestors: { [`${HEAD}->${INTEGRATION_BRANCH}`]: true },
+    ciBySha: { [INTEG_HEAD]: { sha: INTEG_HEAD, state: 'PENDING', runId: 'run-integ' } },
+  });
+  const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger([TASK.id]) });
+  assert.equal(r.derivedState, 'INTEGRATING');
+  assert.ok(r.reasons.includes('POST_INTEGRATION_CI_PENDING'));
+});
+
+test('a merged PR is durable evidence of integration (ledger not required)', async () => {
+  const gh = ghWithIntegration({
+    pr: { number: 77, headSha: HEAD, headRef: TASK.branch, baseRef: INTEGRATION_BRANCH, state: 'closed', merged: true },
+    ancestors: { [`${HEAD}->${INTEGRATION_BRANCH}`]: true },
+    ciBySha: { [INTEG_HEAD]: { sha: INTEG_HEAD, state: 'GREEN', runId: 'run-integ' } },
+  });
+  const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger() });
+  assert.equal(r.derivedState, 'NEXT_TASK');
 });
