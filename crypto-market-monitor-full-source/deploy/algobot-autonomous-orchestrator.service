@@ -15,6 +15,10 @@ Description=ALGOBOT Autonomous Orchestrator (P0 pipeline daemon)
 Documentation=file:///opt/algobot/crypto-market-monitor/docs/superpowers/specs/2026-09-06-algobot-full-autonomous-orchestrator-design.md
 After=network-online.target
 Wants=network-online.target
+# Restart-storm guard — must live in [Unit] (systemd >= 229 ignores these in
+# [Service]; verified with `systemd-analyze verify`). >5 restarts in 5 min -> stop.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -28,9 +32,6 @@ ExecStart=/usr/bin/node scripts/run-autonomous-orchestrator.mjs $ALGOBOT_ORCHEST
 
 Restart=always
 RestartSec=15
-# Restart storm guard: if it dies >5 times in 5 min, stop and wait for a human.
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Graceful shutdown: the loop handles SIGTERM and exits between ticks.
 KillSignal=SIGTERM

@@ -30,6 +30,22 @@ function isFullSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value.trim());
 }
 
+function runOrderKey(r) {
+  return r.completedAt || r.startedAt || r.updatedAt || '';
+}
+
+// Authoritative "which run is newer": by completion/start timestamp, then by
+// numeric run id, then by string run id. Never by array position.
+function laterRun(a, b) {
+  const ka = runOrderKey(a);
+  const kb = runOrderKey(b);
+  if (ka !== kb) return ka > kb ? a : b;
+  const na = Number(a.runId);
+  const nb = Number(b.runId);
+  if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na > nb ? a : b;
+  return String(a.runId ?? '') >= String(b.runId ?? '') ? a : b;
+}
+
 function classifyCheck(name, headSha, runs) {
   const forHead = runs.filter((r) => r && r.name === name && r.headSha === headSha);
   const anyForCheck = runs.some((r) => r && r.name === name);
@@ -37,8 +53,7 @@ function classifyCheck(name, headSha, runs) {
   if (forHead.length === 0) {
     return { name, status: 'missing', staleElsewhere: anyForCheck };
   }
-  // Last matching run in array order is the most recent observation.
-  const latest = forHead[forHead.length - 1];
+  const latest = forHead.reduce(laterRun);
   if (latest.status !== 'completed') {
     return { name, status: 'pending', conclusion: latest.conclusion ?? null };
   }

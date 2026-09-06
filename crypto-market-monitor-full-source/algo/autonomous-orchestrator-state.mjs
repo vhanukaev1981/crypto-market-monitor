@@ -136,6 +136,7 @@ export function createOrchestratorStateMachine(config = {}) {
       updatedAt: at,
       reason: 'INITIALIZED',
       lastEventId: null,
+      processedEventIds: [],
       history: [{ state: 'TASK_READY', eventId: null, at, reason: 'INITIALIZED' }],
     });
   }
@@ -158,6 +159,7 @@ export function createOrchestratorStateMachine(config = {}) {
     }
     if (!Number.isInteger(snapshot.attempt) || snapshot.attempt < 1) fail(ERR.SNAPSHOT, 'snapshot.attempt invalid');
     if (!Array.isArray(snapshot.history)) fail(ERR.SNAPSHOT, 'snapshot.history invalid');
+    if (!Array.isArray(snapshot.processedEventIds)) fail(ERR.SNAPSHOT, 'snapshot.processedEventIds invalid');
     for (const field of ['prNumber']) {
       if (!(snapshot[field] === null || Number.isInteger(snapshot[field]))) fail(ERR.SNAPSHOT, `snapshot.${field} invalid`);
     }
@@ -326,8 +328,10 @@ export function createOrchestratorStateMachine(config = {}) {
     validateSnapshot(snapshot);
     validateEvent(event);
 
-    // Idempotent replay: an event already applied is a no-op.
-    if (snapshot.lastEventId !== null && event.id === snapshot.lastEventId) {
+    // Idempotent replay: ANY event id we have already processed is a no-op,
+    // not only the immediately previous one (a delayed duplicate can arrive
+    // after later events have advanced the state).
+    if (event.id === snapshot.lastEventId || snapshot.processedEventIds.includes(event.id)) {
       return snapshot;
     }
 
@@ -346,6 +350,7 @@ export function createOrchestratorStateMachine(config = {}) {
       updatedAt: at,
       reason,
       lastEventId: event.id,
+      processedEventIds: snapshot.processedEventIds.concat([event.id]).slice(-HISTORY_LIMIT),
       history,
     };
 

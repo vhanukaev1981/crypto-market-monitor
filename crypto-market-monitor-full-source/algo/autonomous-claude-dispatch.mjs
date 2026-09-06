@@ -150,11 +150,15 @@ export function createClaudeDispatcher(config = {}) {
     }
     if (!result || typeof result !== 'object') fail(ERR.FAILED, 'runProcess returned no result');
 
+    // A completion marker is only trustworthy from a worker that exited
+    // successfully. A nonzero exit means a later step (push, cleanup, ...)
+    // failed even if the marker line was already printed.
+    if (Number(result.code) !== 0) {
+      fail(ERR.FAILED, `Claude exited ${result.code}; completion markers from a failed worker are not accepted`);
+    }
+
     const completion = parseCompletion(result.stdout);
     if (!completion) {
-      if (Number(result.code) !== 0) {
-        fail(ERR.FAILED, `exit ${result.code} with no completion marker`);
-      }
       fail(ERR.UNPARSEABLE, 'no ALGOBOT_COMPLETION_JSON line in Claude output');
     }
     if (completion.invalid) fail(ERR.UNPARSEABLE, 'completion marker present but malformed or unknown verdict');
