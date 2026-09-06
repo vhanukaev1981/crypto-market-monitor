@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - agent/algo-v2-hardening-v1
+      - agent/algobot-p0-persistent-recovery
     paths:
       - '.algo-v2-autonomous-heartbeat'
       - '.github/workflows/algo-v2-autonomous-build.yml'
@@ -19,7 +19,7 @@ defaults:
     working-directory: crypto-market-monitor-full-source
 
 concurrency:
-  group: algo-v2-autonomous-build
+  group: algo-v2-autonomous-build-p0
   cancel-in-progress: false
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
       - name: Checkout exact branch state
         uses: actions/checkout@v4
         with:
-          ref: agent/algo-v2-hardening-v1
+          ref: agent/algobot-p0-persistent-recovery
           persist-credentials: false
 
       - name: Setup Node 22.13.0
@@ -53,7 +53,7 @@ jobs:
           node scripts/run-autonomous-build-cycle.mjs \
             --state validation/autonomous-build-state.json \
             --repository vhanukaev1981/crypto-market-monitor \
-            --branch agent/algo-v2-hardening-v1 \
+            --branch agent/algobot-p0-persistent-recovery \
             --head-sha "$HEAD_SHA" \
             --qualification-status MISSING \
             > validation/autonomous-build-artifacts/cycle-plan.json
