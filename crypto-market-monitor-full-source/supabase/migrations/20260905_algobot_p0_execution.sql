@@ -122,6 +122,15 @@ begin
     raise exception 'no execution_ledger row found for order_link_id %', p_order_link_id;
   end if;
 
+  if exists (select 1 from public.canary_reservations where order_link_id = p_order_link_id) then
+    raise exception 'a CANARY reservation already exists for order_link_id %', p_order_link_id;
+  end if;
+
+  -- All CANARY budget accounting reads/writes below happen while this
+  -- function still holds the bot_state_meta row lock acquired above, which
+  -- is what makes the aggregate sum-then-insert sequence race-free. Any
+  -- other code path that writes to canary_reservations must take the same
+  -- bot_state_meta lock first to preserve this invariant.
   select coalesce(sum(canary_reservations.reserved_notional_usdt), 0) into v_committed_total
     from public.canary_reservations
     where status in ('RESERVED', 'COMMITTED');
