@@ -4,6 +4,62 @@ import * as riskEngine from '../algo/risk-engine.mjs';
 
 const { evaluateRisk } = riskEngine;
 
+test('rejects invalid trade and market-risk inputs fail-closed', () => {
+  const base = {
+    portfolioEquity: 1000,
+    dailyPnlPct: 0,
+    drawdownPct: 0,
+    volatilityLevel: 'normal',
+    currentSymbolExposurePct: 0,
+    maxSymbolExposurePct: 40,
+    requestedNotional: 100,
+    spreadBps: 2,
+    maxSpreadBps: 10,
+    estimatedSlippageBps: 2,
+    maxSlippageBps: 10,
+  };
+  for (const patch of [
+    { requestedNotional: -1 },
+    { requestedNotional: Number.NaN },
+    { currentSymbolExposurePct: -1 },
+    { maxSymbolExposurePct: 0 },
+    { spreadBps: -1 },
+    { maxSpreadBps: -1 },
+    { estimatedSlippageBps: -1 },
+    { maxSlippageBps: -1 },
+    { drawdownPct: -1 },
+    { dailyPnlPct: Number.NaN },
+  ]) {
+    const result = evaluateRisk({ ...base, ...patch });
+    assert.equal(result.decision, 'REJECTED');
+    assert.equal(result.approvedNotional, 0);
+    assert.equal(result.reasonCode, 'RISK_001_INVALID_INPUT');
+  }
+});
+
+test('rejects unknown volatility enum values fail-closed', () => {
+  const base = {
+    portfolioEquity: 1000,
+    dailyPnlPct: 0,
+    drawdownPct: 0,
+    currentSymbolExposurePct: 0,
+    maxSymbolExposurePct: 40,
+    requestedNotional: 100,
+    spreadBps: 2,
+    maxSpreadBps: 10,
+    estimatedSlippageBps: 2,
+    maxSlippageBps: 10,
+  };
+  for (const volatilityLevel of ['NORMAL', 'unknown', '', null, 1]) {
+    const result = evaluateRisk({ ...base, volatilityLevel });
+    assert.deepEqual(result, {
+      decision: 'REJECTED',
+      approvedNotional: 0,
+      reasonCode: 'RISK_001_INVALID_INPUT',
+    });
+  }
+});
+
 test('rejects trade when daily loss exceeds limit', () => {
   const result = evaluateRisk({
     portfolioEquity: 1000,
