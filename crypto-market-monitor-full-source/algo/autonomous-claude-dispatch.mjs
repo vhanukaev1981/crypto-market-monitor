@@ -61,7 +61,7 @@ export function createClaudeDispatcher(config = {}) {
     fail(ERR.SAFETY, 'claudeArgs must not name a protected branch');
   }
 
-  function buildPacket({ task, baseSha, branch, acceptanceCriteria, constraints, attempt, priorFindings }) {
+  function buildPacket({ task, baseSha, branch, acceptanceCriteria, constraints, attempt, priorFindings, jobId }) {
     const findingsBlock = Array.isArray(priorFindings) && priorFindings.length
       ? `\nPRIOR FINDINGS TO ADDRESS:\n- ${priorFindings.map(String).join('\n- ')}\n`
       : '';
@@ -72,6 +72,7 @@ export function createClaudeDispatcher(config = {}) {
       `BASE_SHA=${baseSha}`,
       `BRANCH=${branch}`,
       `ATTEMPT=${attempt}`,
+      ...(jobId ? [`JOB_ID=${jobId}`] : []),
       findingsBlock,
       'ACCEPTANCE CRITERIA:',
       `- ${acceptanceCriteria}`,
@@ -108,7 +109,7 @@ export function createClaudeDispatcher(config = {}) {
   }
 
   async function dispatchClaudeTask(request = {}) {
-    const { task, baseSha, branch, acceptanceCriteria, constraints, attempt, priorFindings } = request;
+    const { task, baseSha, branch, acceptanceCriteria, constraints, attempt, priorFindings, jobId } = request;
 
     if (!task || typeof task !== 'object' || !isNonEmptyString(task.id)) fail(ERR.INPUT, 'task.id is required');
     if (!isNonEmptyString(branch)) fail(ERR.INPUT, 'branch is required');
@@ -127,7 +128,7 @@ export function createClaudeDispatcher(config = {}) {
     }
     if (!Number.isInteger(attempt) || attempt < 1) fail(ERR.INPUT, 'attempt must be a positive integer');
 
-    const packet = buildPacket({ task, baseSha, branch, acceptanceCriteria: criteria, constraints, attempt, priorFindings });
+    const packet = buildPacket({ task, baseSha, branch, acceptanceCriteria: criteria, constraints, attempt, priorFindings, jobId });
 
     // Defence in depth: nothing handed to the process may name a protected branch.
     for (const arg of claudeArgs) {

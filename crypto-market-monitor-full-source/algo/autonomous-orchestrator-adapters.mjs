@@ -128,6 +128,17 @@ export function createGithubRestAdapter(config = {}) {
     return body && body.object ? body.object.sha : null;
   }
 
+  // Read canonical file content from an arbitrary ref (e.g. the P0 plan on the
+  // integration branch) — NOT pinned to the control branch.
+  async function getPlanContent(path, ref) {
+    if (!isNonEmptyString(path) || !isNonEmptyString(ref)) fail(ERR.INPUT, 'getPlanContent needs a path and a ref');
+    const res = await call(`/contents/${path}?ref=${encodeURIComponent(ref)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) fail(ERR.TRANSIENT, `contents(plan) ${res.status}`);
+    const body = await res.json();
+    return b64decode(body.content);
+  }
+
   function mapPr(pr) {
     return {
       number: pr.number,
@@ -352,6 +363,7 @@ export function createGithubRestAdapter(config = {}) {
   return {
     controlBranch,
     getBranchHead,
+    getPlanContent,
     getOpenPullRequest,
     getMergedPullRequest,
     getCiStatus,

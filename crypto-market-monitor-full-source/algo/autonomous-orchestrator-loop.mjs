@@ -170,11 +170,14 @@ export function createOrchestratorLoop(config = {}) {
           id: `cigreen:${sha}`, type: 'CI_GREEN', headSha: sha,
           ciRunId: (reconciled.evidence && reconciled.evidence.ci && reconciled.evidence.ci.runId) || 'observed',
         } : null;
-      case 'APPROVED_FOR_INTEGRATION':
-        return sha ? {
+      case 'APPROVED_FOR_INTEGRATION': {
+        if (!sha) return null;
+        const rid = (reconciled.evidence && reconciled.evidence.review && reconciled.evidence.review.reviewerId) || null;
+        return {
           id: `approved:${sha}`, type: 'REVIEW_APPROVED',
-          evidence: { verdict: 'APPROVED_FOR_INTEGRATION', sha, reviewerId: 'observed-independent' },
-        } : null;
+          evidence: { verdict: 'APPROVED_FOR_INTEGRATION', sha, reviewerId: rid || 'observed-independent' },
+        };
+      }
       case 'INTEGRATING':
         return { id: `integstart:${sha || ''}`, type: 'INTEGRATION_STARTED', integrationTarget: integrationBranch };
       case 'NEXT_TASK':
@@ -582,24 +585,6 @@ export function createOrchestratorLoop(config = {}) {
 
   // --- persistent loop ------------------------------------------------
 
-  async function tryReacquireLease() {
-    try {
-      if (typeof lease?.adoptLease === 'function') {
-        const held = await lease.adoptLease();
-        if (held && held.fenceToken) fenceToken = held.fenceToken;
-        return true;
-      }
-    } catch { /* fall through */ }
-    try {
-      if (typeof lease?.acquireLease === 'function') {
-        const held = await lease.acquireLease();
-        if (held && held.fenceToken) fenceToken = held.fenceToken;
-        return true;
-      }
-    } catch { /* fall through */ }
-    return false;
-  }
-
   async function run({ signal, intervalMs = 30_000, maxTicks = Infinity } = {}) {
     let ticks = 0;
     let last = null;
@@ -613,10 +598,11 @@ export function createOrchestratorLoop(config = {}) {
       ticks += 1;
 
       if (last && last.status === 'LEASE_LOST') {
-        const recovered = await tryReacquireLease();
-        if (!recovered) {
-          return Object.freeze({ status: 'STOPPED', reason: 'LEASE_LOST', ticks, last });
-        }
+        // Fail-closed: a lost lease STOPS the daemon. It does NOT silently
+        // reacquire and continue — commit-time leaseCheck closures in the live
+        // adapters would still hold the old token (split-brain). systemd
+        // Restart=always brings the process back with a clean re-acquisition.
+        return Object.freeze({ status: 'STOPPED', reason: 'LEASE_LOST', ticks, last });
       } else if (last && last.action && STOP_ACTIONS.has(last.action)) {
         return Object.freeze({ status: 'STOPPED', reason: last.action, ticks, last });
       }

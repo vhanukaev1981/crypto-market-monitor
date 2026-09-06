@@ -121,6 +121,14 @@ async function liveAdapters(integrationBranch) {
   const gh = createGithubRestAdapter({ repo, token, controlBranch, trustedReviewers, leaseCheck });
   const stateStore = createGithubStateStore({ repo, token, controlBranch, leaseCheck });
 
+  // Bootstrap the control branch if it does not exist yet (from the P0 head).
+  if (await gh.getBranchHead(controlBranch) == null) {
+    const p0Head = await gh.getBranchHead(integrationBranch);
+    if (!p0Head) throw new Error(`ORCHESTRATOR_LIVE_ADAPTERS_NOT_PROVISIONED: integration branch ${integrationBranch} not found`);
+    await gh.createBranchRef(controlBranch, p0Head);
+    emit({ level: 'info', msg: 'created control branch', controlBranch, from: p0Head });
+  }
+
   // Independent review client — only if explicitly configured; otherwise the
   // gate is unconfigured and the loop fail-closes at READY_FOR_CHATGPT_REVIEW.
   let reviewClient = null;
@@ -185,17 +193,22 @@ async function liveAdapters(integrationBranch) {
       const baseSha = (reconciled && reconciled.integrationHead)
         || await gh.getBranchHead(integrationBranch); // real P0 head, never all-zeros
       if (!baseSha || /^0+$/.test(baseSha)) throw new Error('ORCHESTRATOR_LIVE_DISPATCH_NO_BASE_SHA');
+      const worktreeRoot = process.env.ALGOBOT_WORKTREE_ROOT || '/opt/algobot/worktrees';
       return dispatcher.dispatchClaudeTask({
-        task,
+        task: { ...task, cwd: `${worktreeRoot}/${task.id}` }, // dedicated worktree per task
         baseSha,
         branch: task.branch,
+        jobId: `fence${fenceToken}-${task.id}-${Date.now()}`, // stale-worker attributable identity
         acceptanceCriteria: `See the approved P0 plan (${planPath}) for ${task.id}.`,
         constraints: ['NO_MERGE_TO_MAIN', 'NO_REAL_BYBIT_ORDER', 'PRESERVE_CANARY_LIMITS', 'STRICT_RED_GREEN_TDD'],
         attempt: attempt || 1,
       });
     },
     planContext: async () => {
-      const md = await readFile(new URL(`../../${planPath}`, import.meta.url), 'utf8').catch(() => readFile(planPath, 'utf8'));
+      // Read the P0 plan from CANONICAL GitHub state (the integration branch),
+      // not the possibly-stale local checkout.
+      const md = (await gh.getPlanContent(planPath, integrationBranch))
+        || await readFile(new URL(`../../${planPath}`, import.meta.url), 'utf8').catch(() => readFile(planPath, 'utf8'));
       const plan = parseP0Plan(md);
       const completedGates = [...envCompleted];
       for (const t of plan.tasks) {
