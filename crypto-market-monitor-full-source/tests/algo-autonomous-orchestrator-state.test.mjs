@@ -344,3 +344,15 @@ test('CLAUDE_DISPATCHED / CLAUDE_READY_FOR_CI reject a non-40-hex SHA', () => {
     /ORCHESTRATOR_INVALID_EVENT/,
   );
 });
+
+// ChatGPT PR #19 re-review 3 (Copilot): a persisted snapshot's baseSha/headSha
+// must be null or a full 40-hex SHA — validateSnapshot must reject a stale /
+// corrupt persisted snapshot rather than let it drive stale-evidence checks.
+test('validateSnapshot rejects a non-40-hex headSha / baseSha in a persisted snapshot', () => {
+  const machine = makeMachine();
+  const good = machine.createInitialSnapshot({ repository: 'a/b', taskId: 't', branch: 'agent/claude-x' });
+  assert.throws(() => machine.validateSnapshot({ ...good, headSha: 'deadbeef' }), /ORCHESTRATOR_INVALID_SNAPSHOT/);
+  assert.throws(() => machine.validateSnapshot({ ...good, baseSha: 'not-a-sha' }), /ORCHESTRATOR_INVALID_SNAPSHOT/);
+  // null and a real 40-hex are fine
+  machine.validateSnapshot({ ...good, headSha: null, baseSha: SHA_A });
+});

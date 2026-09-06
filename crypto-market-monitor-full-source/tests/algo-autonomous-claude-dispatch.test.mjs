@@ -218,3 +218,13 @@ test('the packet carries a JOB_ID when one is supplied', async () => {
   await dispatcher.dispatchClaudeTask(baseArgs({ jobId: 'fence7-p0-task-4-1699999999' }));
   assert.match(runner.calls[0].input, /JOB_ID[=:\s]*fence7-p0-task-4-1699999999/);
 });
+
+// ChatGPT PR #19 re-review 3 (Copilot): a completion marker whose headSha is
+// present but not a full 40-hex SHA must be rejected fail-closed.
+test('a completion marker with a non-40-hex headSha is rejected', async () => {
+  const dispatcher = dispatcherWith({ code: 0, stdout: 'ALGOBOT_COMPLETION_JSON: {"completion":"READY_FOR_CI","headSha":"abc123"}', stderr: '' });
+  await assert.rejects(
+    () => dispatcher.dispatchClaudeTask(baseArgs()),
+    /ORCHESTRATOR_DISPATCH_UNPARSEABLE_COMPLETION/,
+  );
+});
