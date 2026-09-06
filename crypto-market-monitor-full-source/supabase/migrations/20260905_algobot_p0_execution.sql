@@ -42,9 +42,9 @@ create table if not exists public.bot_state_meta (
   singleton_key text primary key check (singleton_key = 'ALGOBOT'),
   trading_state text not null default 'RECOVERY_REQUIRED'
     check (trading_state in ('RECOVERY_REQUIRED', 'TRADING_ENABLED', 'TRADING_LOCKED')),
-  max_order_notional_usdt numeric(30, 12) not null default 10
+  max_order_notional_usdt numeric not null default 10
     check (max_order_notional_usdt > 0),
-  max_cumulative_notional_usdt numeric(30, 12) not null default 100
+  max_cumulative_notional_usdt numeric not null default 100
     check (max_cumulative_notional_usdt > 0),
   executor_owner_id text,
   executor_fence_token bigint not null default 0 check (executor_fence_token >= 0),
