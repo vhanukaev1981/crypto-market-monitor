@@ -1,0 +1,55 @@
+name: ALGOBOT P0 PostgreSQL TDD
+
+on:
+  push:
+    branches:
+      - agent/algobot-p0-persistent-recovery
+      - agent/algobot-p0-task2-red
+      - agent/algobot-p0-task2-green
+    paths:
+      - 'crypto-market-monitor-full-source/algo/**'
+      - 'crypto-market-monitor-full-source/supabase/migrations/**'
+      - 'crypto-market-monitor-full-source/tests/algo-p0-*.test.mjs'
+      - '.github/workflows/algobot-p0-postgres-tdd.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: crypto-market-monitor-full-source
+
+jobs:
+  postgres-p0:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: algobot_p0_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d algobot_p0_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ALGOBOT_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/algobot_p0_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: PostgreSQL identity evidence
+        run: psql "$ALGOBOT_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "select version(), current_database();"
+      - name: P0 PostgreSQL tests
+        run: node --test tests/algo-p0-*.test.mjs
+      - name: Existing isolated ALGO regression suite
+        run: node --test tests/algo-*.test.mjs

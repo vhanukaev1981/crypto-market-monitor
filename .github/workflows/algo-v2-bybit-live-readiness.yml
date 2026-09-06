@@ -1,0 +1,68 @@
+name: ALGO V2 Bybit Live Readiness
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/algo-v2-bybit-canary-ready
+    paths:
+      - .github/workflows/algo-v2-bybit-live-readiness.yml
+      - crypto-market-monitor-full-source/algo/bybit-live-adapter.mjs
+      - crypto-market-monitor-full-source/algo/bybit-v5-readonly-transport.mjs
+      - crypto-market-monitor-full-source/algo/live-canary-policy.mjs
+      - crypto-market-monitor-full-source/algo/live-readiness.mjs
+      - crypto-market-monitor-full-source/scripts/check-bybit-live-readiness.mjs
+      - crypto-market-monitor-full-source/tests/algo-bybit-live-adapter.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  safety-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+      - name: Run safety regression
+        working-directory: crypto-market-monitor-full-source
+        run: node --test tests/algo-bybit-live-adapter.test.mjs tests/algo-bybit-readonly-transport.test.mjs tests/algo-bybit-readonly-diagnostic.test.mjs tests/algo-live-canary-policy.test.mjs tests/algo-live-readiness.test.mjs
+
+  live-readiness-check:
+    needs: safety-regression
+    runs-on: [self-hosted, linux, x64, bybit-non-us]
+    timeout-minutes: 5
+    env:
+      BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
+      BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+      - name: Verify secrets are present without printing values
+        shell: bash
+        run: |
+          test -n "$BYBIT_API_KEY" || { echo 'BYBIT_API_KEY is missing'; exit 2; }
+          test -n "$BYBIT_API_SECRET" || { echo 'BYBIT_API_SECRET is missing'; exit 2; }
+          echo 'Required Bybit secrets are present.'
+      - name: Run Bybit Live Readiness Diagnostic (Read-Only)
+        working-directory: crypto-market-monitor-full-source
+        run: |
+          set +e
+          node scripts/check-bybit-live-readiness.mjs > /tmp/bybit_readiness.json 2>&1
+          EXIT_CODE=$?
+          cat /tmp/bybit_readiness.json
+          if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/bybit_readiness.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $EXIT_CODE
+
