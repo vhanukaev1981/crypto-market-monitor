@@ -105,3 +105,95 @@ test('repeated commit is idempotent and never double-counts filled notional', ()
   assert.equal(psql(`select reserved_notional_usdt from canary_reservations where id='${reservationId}' and status='COMMITTED';`), '7.500000000000');
   assert.equal(psql(`select coalesce(sum(reserved_notional_usdt),0) from canary_reservations where status in ('RESERVED','COMMITTED');`), '7.500000000000');
 });
+// ---------------------------------------------------------------------------
+// ChatGPT independent-review follow-up (PR #18)
+//
+// Finding 1: commit() must reject a filled notional greater than the amount
+//            originally reserved -- a commit can never authorize more CANARY
+//            budget than was reserved for that order.
+// Finding 2: commit()/release() must FAIL CLOSED for a nonexistent reservation
+//            id or an illegal state transition, instead of silently updating
+//            zero rows and returning success.
+// ---------------------------------------------------------------------------
+
+const MISSING_RESERVATION_ID = '00000000-0000-0000-0000-000000000000';
+
+function tryPsql(sql) {
+  return spawnSync('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-X', '-q', '-c', sql], { encoding: 'utf8' });
+}
+
+function reservedOrCommittedSum() {
+  return psql(`select coalesce(sum(reserved_notional_usdt),0) from canary_reservations where status in ('RESERVED','COMMITTED');`);
+}
+
+test('commit rejects a filled notional above the reserved amount', () => {
+  createExecution('task2-overfill');
+  const reservationId = psql(reserveSql('task2-overfill')).split(':')[0];
+  const result = tryPsql(commitSql(reservationId, 12));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /exceed|reserved/i);
+  // Accounting is untouched: still RESERVED at the original 10 USDT.
+  assert.equal(reservedOrCommittedSum(), '10.000000000000');
+  assert.equal(psql(`select status from canary_reservations where id='${reservationId}';`), 'RESERVED');
+});
+
+test('commit rejects a non-positive filled notional with a clear message', () => {
+  createExecution('task2-zero-fill');
+  const reservationId = psql(reserveSql('task2-zero-fill')).split(':')[0];
+  const result = tryPsql(commitSql(reservationId, 0));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /positive/i);
+  assert.equal(psql(`select status from canary_reservations where id='${reservationId}';`), 'RESERVED');
+});
+
+test('commit fails closed on a nonexistent reservation id', () => {
+  const result = tryPsql(commitSql(MISSING_RESERVATION_ID, 5));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /no CANARY reservation|not found/i);
+});
+
+test('release fails closed on a nonexistent reservation id', () => {
+  const result = tryPsql(releaseSql(MISSING_RESERVATION_ID));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /no CANARY reservation|not found/i);
+});
+
+test('commit fails closed on an already RELEASED reservation', () => {
+  createExecution('task2-rel-then-commit');
+  const reservationId = psql(reserveSql('task2-rel-then-commit')).split(':')[0];
+  psql(releaseSql(reservationId));
+  const result = tryPsql(commitSql(reservationId, 10));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /RELEASED/i);
+  assert.equal(reservedOrCommittedSum(), '0');
+});
+
+test('release fails closed on an already COMMITTED reservation', () => {
+  createExecution('task2-commit-then-rel');
+  const reservationId = psql(reserveSql('task2-commit-then-rel')).split(':')[0];
+  psql(commitSql(reservationId, 8));
+  const result = tryPsql(releaseSql(reservationId));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /COMMITTED/i);
+  assert.equal(reservedOrCommittedSum(), '8.000000000000');
+});
+
+test('commit replay with a conflicting filled notional fails closed', () => {
+  createExecution('task2-conflicting-replay');
+  const reservationId = psql(reserveSql('task2-conflicting-replay')).split(':')[0];
+  psql(commitSql(reservationId, 7.5));
+  const result = tryPsql(commitSql(reservationId, 6));
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /already committed|conflicting/i);
+  assert.equal(reservedOrCommittedSum(), '7.500000000000');
+});
+
+test('commit replay with the identical filled notional stays idempotent', () => {
+  createExecution('task2-identical-replay');
+  const reservationId = psql(reserveSql('task2-identical-replay')).split(':')[0];
+  psql(commitSql(reservationId, 7.5));
+  // Same evidence twice must remain a no-op, not a fail-closed error.
+  psql(commitSql(reservationId, 7.5));
+  assert.equal(reservedOrCommittedSum(), '7.500000000000');
+  assert.equal(psql(`select status from canary_reservations where id='${reservationId}';`), 'COMMITTED');
+});

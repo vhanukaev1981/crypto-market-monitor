@@ -152,3 +152,60 @@ test('a stale executor fence token fails closed and leaves no reservation behind
   assert.equal(committedOrReservedSum(), '0');
   assert.equal(psql(`select count(*) from canary_reservations where order_link_id='store-stale-fence';`), '0');
 });
+
+// ---------------------------------------------------------------------------
+// ChatGPT independent-review follow-up (PR #18) -- adapter surface
+//
+// The store is a thin pass-through, so these assert that the SQL authority's
+// new guards propagate cleanly through createCanaryBudgetStore():
+//   Finding 1: reject commit() above the reserved amount.
+//   Finding 2: fail closed for a nonexistent id or an illegal state change.
+// ---------------------------------------------------------------------------
+
+const STORE_MISSING_RESERVATION_ID = '00000000-0000-0000-0000-000000000000';
+
+test('commit rejects a filled notional above the reserved amount', async () => {
+  createExecution('store-overfill');
+  const { reservationId } = await store.reserve({ orderLinkId: 'store-overfill', requestedNotionalUsdt: 10, executorFenceToken: 1 });
+  await assert.rejects(
+    () => store.commit({ reservationId, filledNotionalUsdt: 12, executorFenceToken: 1 }),
+    /exceed|reserved/i,
+  );
+  assert.equal(committedOrReservedSum(), '10.000000000000');
+});
+
+test('commit fails closed on a nonexistent reservation id', async () => {
+  await assert.rejects(
+    () => store.commit({ reservationId: STORE_MISSING_RESERVATION_ID, filledNotionalUsdt: 5, executorFenceToken: 1 }),
+    /no CANARY reservation|not found/i,
+  );
+});
+
+test('release fails closed on a nonexistent reservation id', async () => {
+  await assert.rejects(
+    () => store.release({ reservationId: STORE_MISSING_RESERVATION_ID, reason: 'proven_non_dispatch', executorFenceToken: 1 }),
+    /no CANARY reservation|not found/i,
+  );
+});
+
+test('commit fails closed on an already RELEASED reservation', async () => {
+  createExecution('store-rel-then-commit');
+  const { reservationId } = await store.reserve({ orderLinkId: 'store-rel-then-commit', requestedNotionalUsdt: 10, executorFenceToken: 1 });
+  await store.release({ reservationId, reason: 'proven_non_dispatch', executorFenceToken: 1 });
+  await assert.rejects(
+    () => store.commit({ reservationId, filledNotionalUsdt: 10, executorFenceToken: 1 }),
+    /RELEASED/i,
+  );
+  assert.equal(committedOrReservedSum(), '0');
+});
+
+test('release fails closed on an already COMMITTED reservation', async () => {
+  createExecution('store-commit-then-rel');
+  const { reservationId } = await store.reserve({ orderLinkId: 'store-commit-then-rel', requestedNotionalUsdt: 10, executorFenceToken: 1 });
+  await store.commit({ reservationId, filledNotionalUsdt: 8, executorFenceToken: 1 });
+  await assert.rejects(
+    () => store.release({ reservationId, reason: 'proven_non_dispatch', executorFenceToken: 1 }),
+    /COMMITTED/i,
+  );
+  assert.equal(committedOrReservedSum(), '8.000000000000');
+});
