@@ -37,11 +37,18 @@ function dryRunAdapters(integrationBranch) {
   return {
     lease: {
       async acquireLease() { store.state = { holderId: 'dry-run', fenceToken: fence, state: 'HELD' }; return { fenceToken: fence }; },
+      async renewLease(token) { if (token !== fence) throw new Error('ORCHESTRATOR_STALE_FENCE'); return { fenceToken: fence }; },
+      async adoptLease() { if (!store.state) throw new Error('ORCHESTRATOR_LEASE_NOT_HELD'); return { fenceToken: fence }; },
       async assertLease(token) { if (token !== fence) throw new Error('ORCHESTRATOR_STALE_FENCE'); return true; },
       async guardMutation(token, fn) { if (token !== fence) throw new Error('ORCHESTRATOR_STALE_FENCE'); return fn(); },
       async releaseLease() { store.state = null; },
     },
     fenceToken: fence,
+    bootstrap: {
+      repository: process.env.ALGOBOT_REPO || 'vhanukaev1981/crypto-market-monitor',
+      taskId: 'dry-run-bootstrap',
+      branch: 'agent/claude-dry-run',
+    },
     reconcile: async () => ({
       derivedState: 'CLAUDE_WORKING',
       headSha: null,
@@ -82,11 +89,23 @@ async function main() {
 
   const live = flag('--live');
   const adapters = live ? liveAdapters() : dryRunAdapters(integrationBranch);
-  const loop = createOrchestratorLoop({ integrationBranch, ...adapters });
 
+  // Acquire the lease FIRST so the loop is constructed with the fence token that
+  // acquisition actually returned — a takeover of a released / expired lease can
+  // increment it (ChatGPT PR #19 review, Codex P1).
+  let fenceToken = adapters.fenceToken;
   if (typeof adapters.lease.acquireLease === 'function') {
-    try { await adapters.lease.acquireLease(); } catch (e) { emit({ level: 'fatal', msg: 'lease acquisition failed', error: e.message }); process.exitCode = 3; return; }
+    try {
+      const held = await adapters.lease.acquireLease();
+      if (held && held.fenceToken) fenceToken = held.fenceToken;
+    } catch (e) {
+      emit({ level: 'fatal', msg: 'lease acquisition failed', error: e.message });
+      process.exitCode = 3;
+      return;
+    }
   }
+
+  const loop = createOrchestratorLoop({ integrationBranch, ...adapters, fenceToken });
 
   if (flag('--once')) {
     const r = await loop.runOnce();

@@ -253,12 +253,19 @@ function durableLoop(overrides = {}) {
 
 test('bounded retry is DURABLE: the attempt counter survives across restarts', async () => {
   const store = memStateStore();
-  const mk = () => durableLoop({ stateStore: store, lease: renewableLease(), fenceToken: 7 });
-  const r1 = await mk().runOnce();
+  // Each retry is a DISTINCT failed CI run (Claude re-worked -> new head sha).
+  const mk = (n) => durableLoop({
+    stateStore: store,
+    lease: renewableLease(),
+    fenceToken: 7,
+    reconcile: async () => ({ derivedState: 'CI_RUNNING', headSha: String(n).repeat(40).slice(0, 40), integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: String(n).repeat(40).slice(0, 40) }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
+    evaluateCi: async (headSha, attempt) => ({ outcome: 'RETURN_TO_CLAUDE', headSha, runId: `run-${n}`, attempt }),
+  });
+  const r1 = await mk(1).runOnce(); // attempt 1 -> fail -> attempt 2
   assert.equal(r1.action, 'RETURN_TO_CLAUDE');
-  const r2 = await mk().runOnce();
+  const r2 = await mk(2).runOnce(); // restart; attempt 2 -> fail -> attempt 3
   assert.equal(r2.action, 'RETURN_TO_CLAUDE');
-  const r3 = await mk().runOnce();
+  const r3 = await mk(3).runOnce(); // restart; attempt 3 -> fail -> exhausted
   assert.equal(r3.action, 'STOP_UNRECOVERABLE');
 });
 
