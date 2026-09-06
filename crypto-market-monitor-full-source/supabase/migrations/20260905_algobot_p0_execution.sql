@@ -57,9 +57,9 @@ create table if not exists public.bot_state_meta (
   trading_state text not null default 'RECOVERY_REQUIRED' check (
     trading_state in ('RECOVERY_REQUIRED', 'TRADING_ENABLED', 'TRADING_LOCKED')
   ),
-  max_order_notional_usdt numeric(30, 8) not null default 10
+  max_order_notional_usdt numeric not null default 10
     check (max_order_notional_usdt > 0),
-  max_cumulative_notional_usdt numeric(30, 8) not null default 100
+  max_cumulative_notional_usdt numeric not null default 100
     check (max_cumulative_notional_usdt > 0),
   reserved_notional_usdt numeric(30, 8) not null default 0
     check (reserved_notional_usdt >= 0),
