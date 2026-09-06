@@ -186,3 +186,179 @@ test('every tick emits a structured status via mutators.postStatus (secrets neve
 test('rejects a `main` integration branch at construction (fail closed)', () => {
   assert.throws(() => createOrchestratorLoop({ integrationBranch: 'main' }), /ORCHESTRATOR_SAFETY_VIOLATION/);
 });
+
+// ---------------------------------------------------------------------------
+// ChatGPT PR #19 review — blockers 1 & 2 + Important fixes.
+// The runtime loop must thread the real state machine and a DURABLE snapshot
+// store so bounded retry, event-id dedup and the review request id survive a
+// restart; the lease must be renewed each tick and a lost lease must stop the
+// daemon; malformed / auth review errors and plan-load failure must fail closed.
+// ---------------------------------------------------------------------------
+
+import { createOrchestratorStateMachine } from '../algo/autonomous-orchestrator-state.mjs';
+
+function memStateStore() {
+  let blob = null;
+  return {
+    _peek: () => blob,
+    async load() { return blob ? JSON.parse(JSON.stringify(blob)) : null; },
+    async save(next) { blob = JSON.parse(JSON.stringify(next)); },
+  };
+}
+
+function renewableLease({ current = 7, expired = false } = {}) {
+  const calls = { renew: 0, assert: 0 };
+  return {
+    _calls: calls,
+    async renewLease(token) {
+      calls.renew += 1;
+      if (expired) throw new Error('ORCHESTRATOR_LEASE_EXPIRED');
+      if (token !== current) throw new Error('ORCHESTRATOR_STALE_FENCE');
+      return { fenceToken: token };
+    },
+    async assertLease(token) {
+      calls.assert += 1;
+      if (expired) throw new Error('ORCHESTRATOR_LEASE_EXPIRED');
+      if (token !== current) throw new Error('ORCHESTRATOR_STALE_FENCE');
+      return true;
+    },
+    async guardMutation(token, fn) { await this.assertLease(token); return fn(); },
+    async adoptLease() { throw new Error('ORCHESTRATOR_LEASE_NOT_HELD'); },
+    async acquireLease() { throw new Error('ORCHESTRATOR_LEASE_HELD'); },
+  };
+}
+
+const CI_FAIL_HEAD = 'cd'.repeat(20);
+const REPO = 'vhanukaev1981/crypto-market-monitor';
+const CLAUDE_BRANCH = 'agent/claude-p0-task3';
+
+function durableLoop(overrides = {}) {
+  return createOrchestratorLoop({
+    integrationBranch: INTEGRATION_BRANCH,
+    lease: renewableLease(),
+    fenceToken: 7,
+    stateMachine: createOrchestratorStateMachine({ integrationBranch: INTEGRATION_BRANCH, maxAttempts: 3 }),
+    stateStore: memStateStore(),
+    bootstrap: { repository: REPO, taskId: 'p0-task-3', branch: CLAUDE_BRANCH },
+    reconcile: async () => ({ derivedState: 'CI_RUNNING', headSha: CI_FAIL_HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: CI_FAIL_HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
+    evaluateCi: async (headSha, attempt) => ({ outcome: 'RETURN_TO_CLAUDE', headSha, runId: 'run-x', attempt }),
+    reviewGate: fakeReviewGate(),
+    dispatchClaude: async () => ({ completion: 'READY_FOR_CI' }),
+    planContext: async () => ({ plan: { tasks: [{ id: 'p0-next', dependsOn: [], status: 'PENDING' }] }, completedGates: [] }),
+    mutators: makeMutators(),
+    logger: () => {},
+    ...overrides,
+  });
+}
+
+test('bounded retry is DURABLE: the attempt counter survives across restarts', async () => {
+  const store = memStateStore();
+  const mk = () => durableLoop({ stateStore: store, lease: renewableLease(), fenceToken: 7 });
+  const r1 = await mk().runOnce();
+  assert.equal(r1.action, 'RETURN_TO_CLAUDE');
+  const r2 = await mk().runOnce();
+  assert.equal(r2.action, 'RETURN_TO_CLAUDE');
+  const r3 = await mk().runOnce();
+  assert.equal(r3.action, 'STOP_UNRECOVERABLE');
+});
+
+test('the same failed CI run does not bump the durable attempt twice across ticks', async () => {
+  const store = memStateStore();
+  const loop = durableLoop({ stateStore: store });
+  await loop.runOnce();
+  const attemptAfter1 = store._peek().snapshot.attempt;
+  await loop.runOnce();
+  assert.equal(store._peek().snapshot.attempt, attemptAfter1);
+});
+
+test('a durable transition history is recorded through the real state machine', async () => {
+  const store = memStateStore();
+  await durableLoop({ stateStore: store }).runOnce();
+  const snap = store._peek().snapshot;
+  assert.ok(Array.isArray(snap.history) && snap.history.length >= 1);
+  assert.ok(Array.isArray(snap.processedEventIds) && snap.processedEventIds.length >= 1);
+});
+
+test('the review request id is persisted and the request is not re-submitted every tick', async () => {
+  const store = memStateStore();
+  let submits = 0;
+  const reviewGate = {
+    configured: true,
+    async requestIndependentReview() { submits += 1; return { status: 'REQUESTED', requestId: 'rr-persist', headSha: HEAD }; },
+    async fetchReviewOutcome() { return { status: 'PENDING' }; },
+  };
+  const loop = durableLoop({
+    stateStore: store,
+    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'run-1' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate,
+  });
+  await loop.runOnce();
+  await loop.runOnce();
+  assert.equal(submits, 1, 'exactly one independent-review submission for a given head');
+  assert.equal(store._peek().runtime.reviewRequestId, 'rr-persist');
+});
+
+test('the lease is renewed on every tick', async () => {
+  const lease = renewableLease();
+  const loop = durableLoop({ lease });
+  await loop.runOnce();
+  await loop.runOnce();
+  assert.equal(lease._calls.renew, 2);
+});
+
+test('run() stops the daemon when the lease is lost and cannot be re-acquired', async () => {
+  const loop = durableLoop({ lease: renewableLease({ expired: true }) });
+  const summary = await loop.run({ intervalMs: 1, maxTicks: 5 });
+  assert.equal(summary.status, 'STOPPED');
+  assert.match(summary.reason, /LEASE/);
+});
+
+test('a malformed review verdict fails closed (STOP_REVIEW_MALFORMED), no mutation', async () => {
+  const mutators = makeMutators();
+  const loop = durableLoop({
+    mutators,
+    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate: { configured: true, async requestIndependentReview() { return { status: 'REQUESTED', requestId: 'x' }; }, async fetchReviewOutcome() { throw new Error('ORCHESTRATOR_REVIEW_MALFORMED_VERDICT: got approve'); } },
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'STOP_REVIEW_MALFORMED');
+  assert.equal(mutators.calls.filter(([n]) => n === 'integratePr').length, 0);
+});
+
+test('a review-client auth/permission failure fails closed (STOP_REVIEW_ERROR), not silent PENDING', async () => {
+  const loop = durableLoop({
+    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate: { configured: true, async requestIndependentReview() { return { status: 'REQUESTED', requestId: 'x' }; }, async fetchReviewOutcome() { throw new Error('HTTP 403 Forbidden: token lacks scope'); } },
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'STOP_REVIEW_ERROR');
+});
+
+test('plan-load failure is reported as STOP_PLAN_UNAVAILABLE, not BACKLOG_EXHAUSTED', async () => {
+  const loop = durableLoop({
+    reconcile: async () => ({ derivedState: 'NEXT_TASK', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
+    planContext: async () => { throw new Error('could not read P0 plan file'); },
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'STOP_PLAN_UNAVAILABLE');
+});
+
+test('a permission-denied mutation fails closed (STOP_PERMISSION) and stops the daemon', async () => {
+  const mutators = {
+    ...makeMutators(),
+    async integratePr() { throw new Error('HTTP 403: Resource not accessible by integration'); },
+  };
+  const loop = durableLoop({
+    mutators,
+    reconcile: async () => ({ derivedState: 'APPROVED_FOR_INTEGRATION', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'run-1' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate: fakeReviewGate({ status: 'COMPLETE', evidence: { verdict: 'APPROVED_FOR_INTEGRATION', sha: HEAD, reviewerId: 'chatgpt' } }),
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'STOP_PERMISSION');
+  const summary = await loop.run({ intervalMs: 1, maxTicks: 3 });
+  assert.equal(summary.status, 'STOPPED');
+});
