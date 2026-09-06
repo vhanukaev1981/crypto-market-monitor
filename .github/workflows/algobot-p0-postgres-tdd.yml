@@ -50,6 +50,6 @@ jobs:
       - name: PostgreSQL identity evidence
         run: psql "$ALGOBOT_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "select version(), current_database();"
       - name: P0 PostgreSQL tests
-        run: node --test tests/algo-p0-*.test.mjs
+        run: node --test --test-concurrency=1 tests/algo-p0-*.test.mjs
       - name: Existing isolated ALGO regression suite
-        run: node --test tests/algo-*.test.mjs
+        run: node --test --test-concurrency=1 tests/algo-*.test.mjs
