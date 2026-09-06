@@ -152,9 +152,16 @@ begin
 end;
 $$ language plpgsql;
 
--- Idempotently commits a RESERVED reservation to its verified filled notional.
--- A reservation already COMMITTED or RELEASED is left untouched so replayed
--- exchange evidence never double-counts CANARY budget.
+-- Commits a RESERVED reservation to its verified filled notional.
+--
+-- Safety invariants (ChatGPT independent review of PR #18):
+--   1. A commit can never authorize more CANARY budget than was reserved for
+--      this order: p_filled_notional_usdt must be > 0 and <= the amount that
+--      was originally reserved.
+--   2. Fail closed, never silent no-op: a reservation id that does not exist,
+--      or a reservation that is RELEASED, raises. An already-COMMITTED
+--      reservation is idempotent ONLY when replayed with the identical filled
+--      notional; a conflicting amount raises.
 create or replace function public.algobot_commit_canary_reservation(
   p_reservation_id uuid,
   p_filled_notional_usdt numeric,
@@ -162,6 +169,7 @@ create or replace function public.algobot_commit_canary_reservation(
 ) returns void as $$
 declare
   v_meta public.bot_state_meta%rowtype;
+  v_reservation public.canary_reservations%rowtype;
 begin
   select * into v_meta from public.bot_state_meta where singleton_key = 'ALGOBOT' for update;
   if not found then
@@ -172,18 +180,54 @@ begin
     raise exception 'stale executor fence token: expected %, got %', v_meta.executor_fence_token, p_executor_fence_token;
   end if;
 
+  -- Lock the reservation row (also under the bot_state_meta lock held above)
+  -- and fail closed if it is not there at all.
+  select * into v_reservation from public.canary_reservations
+    where id = p_reservation_id
+    for update;
+  if not found then
+    raise exception 'no CANARY reservation found for id %', p_reservation_id;
+  end if;
+
+  if p_filled_notional_usdt is null or p_filled_notional_usdt <= 0 then
+    raise exception 'commit filled notional must be positive, got % for reservation %', p_filled_notional_usdt, p_reservation_id;
+  end if;
+
+  if v_reservation.status = 'RELEASED' then
+    raise exception 'cannot commit reservation % because it is RELEASED', p_reservation_id;
+  end if;
+
+  if v_reservation.status = 'COMMITTED' then
+    -- Replayed exchange evidence: a no-op only when it agrees with what was
+    -- already committed. A different amount is a real accounting conflict.
+    if p_filled_notional_usdt <> v_reservation.reserved_notional_usdt then
+      raise exception 'reservation % already COMMITTED at % USDT; refusing conflicting commit of % USDT',
+        p_reservation_id, v_reservation.reserved_notional_usdt, p_filled_notional_usdt;
+    end if;
+    return;
+  end if;
+
+  -- v_reservation.status = 'RESERVED'
+  if p_filled_notional_usdt > v_reservation.reserved_notional_usdt then
+    raise exception 'commit of % USDT exceeds the reserved amount of % USDT for reservation %',
+      p_filled_notional_usdt, v_reservation.reserved_notional_usdt, p_reservation_id;
+  end if;
+
   update public.canary_reservations
     set reserved_notional_usdt = p_filled_notional_usdt,
         status = 'COMMITTED',
         updated_at = now()
-    where id = p_reservation_id
-      and status = 'RESERVED';
+    where id = p_reservation_id;
 end;
 $$ language plpgsql;
 
 -- Releases a RESERVED reservation (e.g. after proven non-dispatch) so its
--- notional no longer counts against the CANARY budget. Idempotent: a
--- reservation already COMMITTED or RELEASED is left untouched.
+-- notional no longer counts against the CANARY budget.
+--
+-- Safety invariant (ChatGPT independent review of PR #18): fail closed, never
+-- silent no-op. A reservation id that does not exist, or a reservation that is
+-- COMMITTED, raises. Re-releasing an already-RELEASED reservation is the one
+-- idempotent case.
 create or replace function public.algobot_release_canary_reservation(
   p_reservation_id uuid,
   p_reason text,
@@ -191,6 +235,7 @@ create or replace function public.algobot_release_canary_reservation(
 ) returns void as $$
 declare
   v_meta public.bot_state_meta%rowtype;
+  v_reservation public.canary_reservations%rowtype;
 begin
   select * into v_meta from public.bot_state_meta where singleton_key = 'ALGOBOT' for update;
   if not found then
@@ -201,11 +246,26 @@ begin
     raise exception 'stale executor fence token: expected %, got %', v_meta.executor_fence_token, p_executor_fence_token;
   end if;
 
+  select * into v_reservation from public.canary_reservations
+    where id = p_reservation_id
+    for update;
+  if not found then
+    raise exception 'no CANARY reservation found for id %', p_reservation_id;
+  end if;
+
+  if v_reservation.status = 'RELEASED' then
+    return;
+  end if;
+
+  if v_reservation.status = 'COMMITTED' then
+    raise exception 'cannot release reservation % because it is COMMITTED', p_reservation_id;
+  end if;
+
+  -- v_reservation.status = 'RESERVED'
   update public.canary_reservations
     set status = 'RELEASED',
         updated_at = now()
-    where id = p_reservation_id
-      and status = 'RESERVED';
+    where id = p_reservation_id;
 end;
 $$ language plpgsql;
 
