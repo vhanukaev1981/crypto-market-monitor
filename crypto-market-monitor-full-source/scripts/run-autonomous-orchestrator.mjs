@@ -13,8 +13,24 @@
 // gate are GREEN.
 
 import process from 'node:process';
+import { readFile } from 'node:fs/promises';
 import { createOrchestratorLoop } from '../algo/autonomous-orchestrator-loop.mjs';
-import { isProtectedBranch } from '../algo/autonomous-orchestrator-state.mjs';
+import {
+  isProtectedBranch,
+  createOrchestratorStateMachine,
+} from '../algo/autonomous-orchestrator-state.mjs';
+import { createOrchestratorLease } from '../algo/autonomous-orchestrator-lease.mjs';
+import { createReviewGate } from '../algo/autonomous-review-gate.mjs';
+import { reconcileGithubState } from '../algo/autonomous-github-reconciler.mjs';
+import { evaluateCiGate } from '../algo/autonomous-ci-gate.mjs';
+import { createClaudeDispatcher } from '../algo/autonomous-claude-dispatch.mjs';
+import {
+  createGithubRestAdapter,
+  createGithubFileLeaseStore,
+  createGithubStateStore,
+  createClaudeCliRunner,
+  parseP0Plan,
+} from '../algo/autonomous-orchestrator-adapters.mjs';
 
 const DEFAULT_INTEGRATION_BRANCH = 'agent/algobot-p0-persistent-recovery';
 
@@ -71,12 +87,93 @@ function dryRunAdapters(integrationBranch) {
   };
 }
 
-// --- Live adapters: not provisioned in this task; fail closed ----------------
-function liveAdapters() {
-  throw new Error(
-    'ORCHESTRATOR_LIVE_ADAPTERS_NOT_PROVISIONED: live GitHub / review / Claude adapters '
-    + 'are wired during Task 10 controlled deployment. Run with --dry-run until then.',
-  );
+// --- Live adapters: real GitHub / lease / Claude / plan wiring --------------
+// Autonomous INTEGRATION stays disabled unless ALGOBOT_ENABLE_P0_INTEGRATION=1
+// (set only after the Task 10 host smoke gate is GREEN). Independent review is
+// hard-required: with no ALGOBOT_REVIEW_* endpoint the review gate fail-closes.
+async function liveAdapters(integrationBranch) {
+  const repo = process.env.ALGOBOT_REPO;
+  const token = process.env.ALGOBOT_GITHUB_TOKEN;
+  const holderId = process.env.ALGOBOT_HOLDER_ID || `algobot-${process.pid}`;
+  const claudeBranch = process.env.ALGOBOT_CLAUDE_BRANCH || 'agent/claude-p0-current';
+  const requiredChecks = (process.env.ALGOBOT_REQUIRED_CHECKS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const planPath = process.env.ALGOBOT_P0_PLAN_PATH || 'docs/superpowers/plans/2026-09-05-algobot-p0-production-architecture.md';
+  const enableIntegration = process.env.ALGOBOT_ENABLE_P0_INTEGRATION === '1';
+
+  if (!repo || !token) {
+    throw new Error('ORCHESTRATOR_LIVE_ADAPTERS_NOT_PROVISIONED: set ALGOBOT_REPO and ALGOBOT_GITHUB_TOKEN');
+  }
+
+  const gh = createGithubRestAdapter({ repo, token });
+  const leaseStore = createGithubFileLeaseStore({ repo, token });
+  const stateStore = createGithubStateStore({ repo, token });
+  const lease = createOrchestratorLease({ store: leaseStore, holderId, ttlMs: Number(process.env.ALGOBOT_LEASE_TTL_MS || 300000), now: () => Date.now() });
+  const held = await lease.acquireLease();
+
+  // Independent review client — only if explicitly configured; otherwise the
+  // gate is unconfigured and the loop fail-closes at READY_FOR_CHATGPT_REVIEW.
+  let reviewClient = null;
+  if (process.env.ALGOBOT_REVIEW_ENDPOINT && process.env.ALGOBOT_REVIEW_TOKEN) {
+    const ep = process.env.ALGOBOT_REVIEW_ENDPOINT;
+    const rt = process.env.ALGOBOT_REVIEW_TOKEN;
+    reviewClient = {
+      reviewerId: process.env.ALGOBOT_REVIEWER_ID || 'chatgpt-independent-reviewer',
+      async submitReviewRequest(packet) {
+        const res = await fetch(`${ep}/requests`, { method: 'POST', headers: { Authorization: `Bearer ${rt}`, 'Content-Type': 'application/json' }, body: JSON.stringify(packet) });
+        if (!res.ok) throw new Error(`review submit ${res.status}`);
+        return res.json();
+      },
+      async fetchReviewOutcome(requestId) {
+        const res = await fetch(`${ep}/requests/${encodeURIComponent(requestId)}`, { headers: { Authorization: `Bearer ${rt}` } });
+        if (res.status === 404 || res.status === 204) return null;
+        if (!res.ok) throw new Error(`review fetch ${res.status}`);
+        return res.json();
+      },
+    };
+  }
+  const reviewGate = createReviewGate({ reviewClient });
+
+  const dispatcher = createClaudeDispatcher({ runProcess: createClaudeCliRunner({ claudeBin: process.env.ALGOBOT_CLAUDE_BIN || 'claude' }) });
+
+  const task = { id: process.env.ALGOBOT_CURRENT_TASK_ID || 'p0-current', branch: claudeBranch, requiredChecks };
+
+  const suppressedIntegrate = async (a) => { emit({ level: 'warn', msg: 'integration disabled (ALGOBOT_ENABLE_P0_INTEGRATION!=1)', args: a }); };
+
+  return {
+    lease,
+    fenceToken: held.fenceToken,
+    stateMachine: createOrchestratorStateMachine({ integrationBranch }),
+    stateStore,
+    bootstrap: { repository: repo, taskId: task.id, branch: claudeBranch },
+    reconcile: () => reconcileGithubState({ repo, integrationBranch, task, github: gh, integrationLedger: gh.integrationLedger }),
+    evaluateCi: (headSha, attempt) => Promise.resolve(gh.getCiStatus(headSha, requiredChecks)).then(async () => {
+      const runsRes = await gh.getCiStatus(headSha, requiredChecks);
+      return evaluateCiGate({ headSha, requiredChecks: requiredChecks.length ? requiredChecks : ['ci'], runs: [{ name: (requiredChecks[0] || 'ci'), headSha, status: runsRes.state === 'PENDING' || runsRes.state === 'NONE' ? 'in_progress' : 'completed', conclusion: runsRes.state === 'GREEN' ? 'success' : runsRes.state === 'FAILED' ? 'failure' : null, runId: runsRes.runId }], attempt: attempt || 1 });
+    }),
+    reviewGate,
+    dispatchClaude: ({ reconciled, attempt }) => dispatcher.dispatchClaudeTask({
+      task,
+      baseSha: reconciled.headSha || process.env.ALGOBOT_BASE_SHA || '0'.repeat(40),
+      branch: claudeBranch,
+      acceptanceCriteria: 'See the approved P0 plan for this task.',
+      constraints: ['NO_MERGE_TO_MAIN', 'NO_REAL_BYBIT_ORDER', 'PRESERVE_CANARY_LIMITS', 'STRICT_RED_GREEN_TDD'],
+      attempt: attempt || 1,
+    }),
+    planContext: async () => {
+      const md = await readFile(new URL(`../../${planPath}`, import.meta.url), 'utf8').catch(() => readFile(planPath, 'utf8'));
+      const plan = parseP0Plan(md);
+      const completedGates = [];
+      for (const t of plan.tasks) {
+        if (t.status === 'DONE' || await gh.integrationLedger.hasIntegratedTask(t.id)) completedGates.push(t.id);
+      }
+      return { plan, completedGates };
+    },
+    mutators: {
+      ...gh.mutators,
+      integratePr: enableIntegration ? gh.mutators.integratePr : suppressedIntegrate,
+    },
+    logger: (r) => emit(r),
+  };
 }
 
 async function main() {
@@ -88,13 +185,20 @@ async function main() {
   }
 
   const live = flag('--live');
-  const adapters = live ? liveAdapters() : dryRunAdapters(integrationBranch);
+  let adapters;
+  try {
+    // Live adapters acquire the lease internally and return the fence token that
+    // acquisition produced (a takeover can increment it — Codex P1). The dry-run
+    // path acquires below.
+    adapters = live ? await liveAdapters(integrationBranch) : dryRunAdapters(integrationBranch);
+  } catch (e) {
+    emit({ level: 'fatal', msg: 'adapter wiring failed', error: e.message });
+    process.exitCode = 3;
+    return;
+  }
 
-  // Acquire the lease FIRST so the loop is constructed with the fence token that
-  // acquisition actually returned — a takeover of a released / expired lease can
-  // increment it (ChatGPT PR #19 review, Codex P1).
   let fenceToken = adapters.fenceToken;
-  if (typeof adapters.lease.acquireLease === 'function') {
+  if (!live && typeof adapters.lease.acquireLease === 'function') {
     try {
       const held = await adapters.lease.acquireLease();
       if (held && held.fenceToken) fenceToken = held.fenceToken;
