@@ -153,3 +153,36 @@ heartbeat failure propagation, pure CI latest-run ordering.
 Regression after H: autonomous family **221/221**; full isolated ALGO regression
 GREEN; `--dry-run --once` exit 0. No merge to `agent/algobot-p0-persistent-recovery`
 or `main`; no real Bybit order; Tasks 10–11 remain owner-blocked.
+
+---
+
+## PR #19 independent re-review 3 (CHANGES_REQUIRED on f8af197) — addressed
+
+Fix commit groups I–K, each RED test-only commit → failing CI, each fix → passing CI:
+
+| Group | RED → GREEN | Blockers |
+|---|---|---|
+| I `1856845` → `737633d` | [34063336835](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34063336835) ✗ / [34063536045](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34063536045) ✓ | **B5** integratePr GETs the live PR and aborts unless open + base==target (non-protected) + head==headSha, then fences at commit; **B7** createBranchRef 422 → `ORCHESTRATOR_STALE_TASK_BRANCH` unless the existing head is exactly baseSha; **B3** getReviewVerdict reads the canonical control-branch `autonomous-review-evidence.json` (keeps reviewerId); **B1** a fresh task branch at the P0 head → `TASK_READY`; Copilot: `getOpenPullRequest` state=open only + `getMergedPullRequest`; `p0-task-<n>` ids; `assertSha` 40-hex; reconciler exposes `integrationHead` |
+| J `6b8ef33` → `9f37de9` | [34063619810](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34063619810) ✗ / [34063843199](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34063843199) ✓ | **B1** the loop actually dispatches Claude for the freshly selected task; **B2** a detached dispatch records `runtime.dispatch` and is never repeated within `dispatchTtlMs` (next tick / restart); **B4** review submit persists intent first, then polls + adopts the endpoint's id on recovery — never a duplicate paid request; **B6a** a 401/403/ADAPTER_AUTH reconcile failure → `STOP_PERMISSION`; Copilot loop:275 — no synthetic-id poll before a request exists |
+| K `294ce5f` → `beb22ed` | [34063919777](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34063919777) ✗ / [34064030371](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34064030371) ✓ | **B2** JOB_ID (fence + task + ts) in the packet + a per-task worktree `cwd`; **B6b / Copilot loop:578** `run()` STOPS fail-closed on LEASE_LOST — the reacquire-and-continue path is removed (split-brain); important: `--live` bootstraps a missing control branch from the P0 head; the P0 plan is read from canonical GitHub state (integration branch), local checkout as fallback; forward-sync `REVIEW_APPROVED` uses the observed reviewerId |
+
+### Prior-fix disposition (re-review 3 "fixed") — confirmed retained
+explicit control branch for file records; non-empty per-check CI evaluation;
+plan DONE parsing; direct adapter auth classification; state/ledger write
+propagation.
+
+### End-to-end after round 4
+- The synthetic E2E + `algo-autonomous-orchestrator-cycle` now cover: next-task
+  selection → branch creation → Claude dispatch (B1); detached dispatch dedup
+  across tick/restart (B2); crash-after-accepted-submit review idempotency (B4);
+  reconcile ADAPTER_AUTH → STOP_PERMISSION (B6a); LEASE_LOST → daemon STOP,
+  no reacquire (B6b); integratePr TOCTOU + createBranchRef staleness (B5/B7);
+  canonical control-branch review evidence (B3).
+- Local: autonomous family **240/240**; full isolated ALGO regression **441/441**
+  (`--test-concurrency=1`, DB-backed P0 excluded), exit 0. `--dry-run --once`
+  exit 0; `--live` fail-closed without env / control branch / required checks.
+
+**No merge to `agent/algobot-p0-persistent-recovery` or `main`; no real Bybit
+order; Tasks 10–11 remain owner-blocked** (host `algobot-bybit-01`, the
+independent-review endpoint, the `ops/algobot-orchestrator-control` branch,
+`ALGOBOT_ENABLE_P0_INTEGRATION=1`).
