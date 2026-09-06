@@ -128,12 +128,7 @@ export function createGithubRestAdapter(config = {}) {
     return body && body.object ? body.object.sha : null;
   }
 
-  async function getOpenPullRequest({ headBranch, baseBranch }) {
-    const res = await call(`/pulls?state=all&head=${owner}:${headBranch}&base=${baseBranch}&per_page=1`);
-    if (!res.ok) fail(ERR.TRANSIENT, `pulls ${res.status}`);
-    const list = await res.json();
-    if (!Array.isArray(list) || list.length === 0) return null;
-    const pr = list[0];
+  function mapPr(pr) {
     return {
       number: pr.number,
       headSha: pr.head && pr.head.sha,
@@ -142,6 +137,26 @@ export function createGithubRestAdapter(config = {}) {
       state: pr.state,
       merged: !!(pr.merged || pr.merged_at),
     };
+  }
+
+  async function getOpenPullRequest({ headBranch, baseBranch }) {
+    // Only an OPEN PR is the current task PR — a closed/merged historical PR for
+    // the same head/base must not be mistaken for it.
+    const res = await call(`/pulls?state=open&head=${owner}:${headBranch}&base=${baseBranch}&per_page=5`);
+    if (!res.ok) fail(ERR.TRANSIENT, `pulls ${res.status}`);
+    const list = await res.json();
+    if (!Array.isArray(list)) return null;
+    const open = list.find((pr) => pr.state === 'open' && !pr.merged_at);
+    return open ? mapPr(open) : null;
+  }
+
+  async function getMergedPullRequest({ headBranch, baseBranch }) {
+    const res = await call(`/pulls?state=closed&head=${owner}:${headBranch}&base=${baseBranch}&per_page=10`);
+    if (!res.ok) fail(ERR.TRANSIENT, `pulls(closed) ${res.status}`);
+    const list = await res.json();
+    if (!Array.isArray(list)) return null;
+    const merged = list.filter((pr) => pr.merged_at).sort((a, b) => (b.merged_at || '').localeCompare(a.merged_at || ''))[0];
+    return merged ? mapPr(merged) : null;
   }
 
   async function getCiStatus(sha, requiredChecks = []) {
@@ -176,6 +191,21 @@ export function createGithubRestAdapter(config = {}) {
   }
 
   async function getReviewVerdict(prNumber) {
+    // 1. Canonical channel: the control-branch review-evidence file that
+    //    recordApproval writes (and where an authenticated endpoint webhook can
+    //    write). The latest 'verdict' record wins.
+    const ev = await files.getFile('autonomous-review-evidence.json');
+    if (ev && ev.content && Array.isArray(ev.content.records)) {
+      let latest = null;
+      for (const rec of ev.content.records) {
+        if (rec && rec.kind === 'verdict' && isNonEmptyString(rec.verdict)) {
+          latest = { verdict: rec.verdict, sha: rec.sha, reviewerId: rec.reviewerId || null, evidenceUrl: null, submittedAt: rec.at || null };
+        }
+      }
+      if (latest) return latest;
+    }
+
+    // 2. Fallback: a trusted-author ALGOBOT_REVIEW_VERDICT marker on the PR.
     const res = await call(`/issues/${prNumber}/comments?per_page=100`);
     if (!res.ok) fail(ERR.TRANSIENT, `comments ${res.status}`);
     const comments = await res.json();
@@ -216,6 +246,20 @@ export function createGithubRestAdapter(config = {}) {
 
   async function integratePr({ prNumber, headSha, target }) {
     if (isProtectedBranch(target)) fail(ERR.SAFETY, `integratePr target ${target} is a protected branch`);
+    // TOCTOU: re-fetch the live PR and prove nothing was retargeted / moved
+    // between reconciliation and this merge. GitHub merges into the PR's CURRENT
+    // base, so validating the argument alone is not enough.
+    const prRes = await call(`/pulls/${prNumber}`);
+    if (!prRes.ok) fail(ERR.TRANSIENT, `pull ${prRes.status}`);
+    const pr = await prRes.json();
+    if (pr.state !== 'open') fail(ERR.SAFETY, `PR #${prNumber} is not open (${pr.state})`);
+    const liveBase = pr.base && pr.base.ref;
+    if (liveBase !== target) fail(ERR.SAFETY, `PR #${prNumber} base is ${liveBase}, not the approved target ${target}`);
+    if (isProtectedBranch(liveBase)) fail(ERR.SAFETY, `PR #${prNumber} base ${liveBase} is a protected branch`);
+    const liveHead = pr.head && pr.head.sha;
+    if (headSha && liveHead !== headSha) fail(ERR.SAFETY, `PR #${prNumber} head ${liveHead} != expected exact SHA ${headSha}`);
+
+    if (typeof leaseCheck === 'function') await leaseCheck(); // fence at commit time
     const res = await call(`/pulls/${prNumber}/merge`, {
       method: 'PUT',
       body: { merge_method: 'merge', sha: headSha },
@@ -246,8 +290,21 @@ export function createGithubRestAdapter(config = {}) {
 
   async function createBranchRef(newBranch, fromSha) {
     if (isProtectedBranch(newBranch)) fail(ERR.SAFETY, `refusing to create protected branch ${newBranch}`);
+    if (typeof leaseCheck === 'function') await leaseCheck();
     const res = await call('/git/refs', { method: 'POST', body: { ref: `refs/heads/${newBranch}`, sha: fromSha } });
-    if (res.status === 422) return { created: false, reason: 'exists' }; // idempotent
+    if (res.status === 422) {
+      // The branch already exists — it is only a benign no-op if its head is
+      // EXACTLY fromSha; otherwise it carries old commits / PR history.
+      const refRes = await call(`/git/ref/heads/${encodeURIComponent(newBranch)}`);
+      if (refRes.status === 404) fail(ERR.TRANSIENT, 'create ref 422 but branch missing on re-read');
+      if (!refRes.ok) fail(ERR.TRANSIENT, `git/ref ${refRes.status}`);
+      const body = await refRes.json();
+      const existing = body && body.object ? body.object.sha : null;
+      if (existing !== fromSha) {
+        fail('ORCHESTRATOR_STALE_TASK_BRANCH', `${newBranch} head ${existing} differs from base ${fromSha}`);
+      }
+      return { created: false, reason: 'exists-at-base' };
+    }
     if (!res.ok) fail(ERR.TRANSIENT, `create ref ${res.status}`);
     return { created: true };
   }
@@ -296,6 +353,7 @@ export function createGithubRestAdapter(config = {}) {
     controlBranch,
     getBranchHead,
     getOpenPullRequest,
+    getMergedPullRequest,
     getCiStatus,
     getReviewVerdict,
     isAncestor,
@@ -440,7 +498,7 @@ export function parseP0Plan(markdown) {
   }
   const byNumber = new Map();
   const tasks = raw.map((t) => {
-    const id = `task-${t.number}-${slug(t.title) || 'unnamed'}`;
+    const id = `p0-task-${t.number}-${slug(t.title) || "unnamed"}`;
     byNumber.set(t.number, id);
     return { ...t, id };
   });

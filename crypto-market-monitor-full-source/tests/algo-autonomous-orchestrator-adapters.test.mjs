@@ -309,7 +309,8 @@ test('R6: a malformed marker from a trusted author is surfaced, not silently dro
 
 test('I-d: an integration-ledger write failure propagates, it is not swallowed', async () => {
   const fetchImpl = fetchLog([
-    ['/pulls/5/merge', jsonResponse({ merged: true })],
+    ['/pulls/5/merge', (u, i, { method }) => (method === 'PUT' ? jsonResponse({ merged: true }) : jsonResponse({}, { status: 404 }))],
+    ['/pulls/5', jsonResponse({ number: 5, state: 'open', base: { ref: 'agent/algobot-p0-persistent-recovery' }, head: { sha: 'a'.repeat(40) } })],
     ['/contents/', (url, init, { method }) => (method === 'GET' ? jsonResponse({ message: 'nf' }, { status: 404 }) : jsonResponse({ message: 'boom' }, { status: 403 }))],
   ]);
   const gh = createGithubRestAdapter({ repo: REPO, token: TOKEN, controlBranch: CONTROL_BRANCH, fetchImpl });

@@ -93,6 +93,7 @@ function reviewEvidence(review, headSha) {
   return {
     sha: review.sha,
     verdict: review.verdict,
+    reviewerId: isNonEmptyString(review.reviewerId) ? review.reviewerId : null,
     matchesHead: review.sha === headSha,
     url: review.evidenceUrl != null ? String(review.evidenceUrl) : null,
     submittedAt: review.submittedAt != null ? String(review.submittedAt) : null,
@@ -101,7 +102,7 @@ function reviewEvidence(review, headSha) {
 
 function buildResult(fields) {
   const {
-    repo, integrationBranch, task, pr = null, headSha = null,
+    repo, integrationBranch, task, pr = null, headSha = null, integrationHead = null,
     ci = { sha: null, state: 'NONE', runId: null, matchesHead: false },
     review = null, derivedState, reasons = [], signals = [], cache,
   } = fields;
@@ -117,6 +118,7 @@ function buildResult(fields) {
     branch: task.branch,
     pr: pr ? { number: pr.number, headSha: pr.headSha, baseRef: pr.baseRef, state: pr.state, merged: !!pr.merged } : null,
     headSha,
+    integrationHead,
     derivedState,
     reasons: [...reasons],
     signals: [...signals],
@@ -132,18 +134,18 @@ export async function reconcileGithubState(params = {}) {
   const { repo, integrationBranch, task, github, cache, integrationLedger = null } = params;
   const requiredChecks = Array.isArray(task.requiredChecks) ? task.requiredChecks : [];
 
-  const branchHead = await guarded('getBranchHead(task.branch)', () => github.getBranchHead(task.branch));
-  if (!isNonEmptyString(branchHead)) {
-    return buildResult({
-      repo, integrationBranch, task, cache,
-      derivedState: 'TASK_READY', reasons: ['TASK_BRANCH_MISSING'],
-    });
-  }
-
   const integrationHead = await guarded(
     'getBranchHead(integrationBranch)',
     () => github.getBranchHead(integrationBranch),
   );
+
+  const branchHead = await guarded('getBranchHead(task.branch)', () => github.getBranchHead(task.branch));
+  if (!isNonEmptyString(branchHead)) {
+    return buildResult({
+      repo, integrationBranch, task, cache, integrationHead,
+      derivedState: 'TASK_READY', reasons: ['TASK_BRANCH_MISSING'],
+    });
+  }
 
   const pr = await guarded(
     'getOpenPullRequest',
@@ -157,16 +159,27 @@ export async function reconcileGithubState(params = {}) {
     () => github.isAncestor(branchHead, integrationBranch),
   );
 
-  const mergedPr = !!(pr && pr.merged === true);
+  let mergedPr = !!(pr && pr.merged === true);
+  if (!mergedPr && typeof github.getMergedPullRequest === 'function') {
+    const mp = await guarded(
+      'getMergedPullRequest',
+      () => github.getMergedPullRequest({ headBranch: task.branch, baseBranch: integrationBranch }),
+    );
+    mergedPr = !!(mp && mp.merged === true && (!isNonEmptyString(mp.headSha) || mp.headSha === branchHead));
+  }
   const ledgerIntegrated = integrationLedger
     ? await guarded('integrationLedger.hasIntegratedTask', () => integrationLedger.hasIntegratedTask(task.id)) === true
     : false;
 
-  // Fresh branch still at base with no PR / no durable evidence -> Claude owes work.
-  if (branchHead === integrationHead && !mergedPr && !ledgerIntegrated) {
+  // Fresh branch still at base with no open PR and no durable integration
+  // evidence: this task has been set up but no worker output exists yet, so it
+  // is READY for dispatch. (The loop's durable snapshot / dispatch marker is
+  // what prevents re-dispatching once Claude has been kicked off — GitHub alone
+  // cannot tell "not started" from "running but has not pushed".)
+  if (branchHead === integrationHead && !mergedPr && !ledgerIntegrated && (!pr || !isNonEmptyString(pr.headSha))) {
     return buildResult({
-      repo, integrationBranch, task, headSha: branchHead, cache,
-      derivedState: 'CLAUDE_WORKING', reasons: ['TASK_BRANCH_AT_BASE_NO_COMMITS'],
+      repo, integrationBranch, task, integrationHead, headSha: branchHead, cache,
+      derivedState: 'TASK_READY', reasons: ['TASK_BRANCH_AT_BASE_NO_COMMITS'],
     });
   }
 
@@ -181,12 +194,12 @@ export async function reconcileGithubState(params = {}) {
     const integCi = ciEvidence(integCiRaw, integrationHead);
     if (integCi.state === 'GREEN' && integCi.matchesHead) {
       return buildResult({
-        repo, integrationBranch, task, headSha: branchHead, ci: integCi, cache,
+        repo, integrationBranch, task, integrationHead, headSha: branchHead, ci: integCi, cache,
         derivedState: 'NEXT_TASK', reasons: ['INTEGRATED_AND_VERIFIED'],
       });
     }
     return buildResult({
-      repo, integrationBranch, task, headSha: branchHead, ci: integCi, cache,
+      repo, integrationBranch, task, integrationHead, headSha: branchHead, ci: integCi, cache,
       derivedState: 'INTEGRATING',
       reasons: ['ALREADY_INTEGRATED', 'POST_INTEGRATION_CI_PENDING'],
     });
@@ -194,14 +207,14 @@ export async function reconcileGithubState(params = {}) {
 
   if (!pr || !isNonEmptyString(pr.headSha)) {
     return buildResult({
-      repo, integrationBranch, task, cache,
+      repo, integrationBranch, task, integrationHead, cache,
       derivedState: 'CLAUDE_WORKING', reasons: ['NO_OPEN_PULL_REQUEST'],
     });
   }
 
   if (pr.headSha !== branchHead) {
     return buildResult({
-      repo, integrationBranch, task, pr, headSha: branchHead, cache,
+      repo, integrationBranch, task, integrationHead, pr, headSha: branchHead, cache,
       ci: ciEvidence(null, branchHead),
       derivedState: 'CLAUDE_WORKING',
       reasons: ['BRANCH_PR_SHA_MISMATCH'],
@@ -226,7 +239,7 @@ export async function reconcileGithubState(params = {}) {
     if (ci.state === 'FAILED' && !ci.matchesHead) reasons.push('CI_STALE_FOR_HEAD');
     if (ci.state === 'PENDING' || ci.state === 'NONE') reasons.push('CI_NOT_COMPLETE_ON_HEAD');
     return buildResult({
-      repo, integrationBranch, task, pr, headSha, ci, review, cache,
+      repo, integrationBranch, task, integrationHead, pr, headSha, ci, review, cache,
       derivedState: 'CI_RUNNING', reasons, signals,
     });
   }
@@ -256,7 +269,7 @@ export async function reconcileGithubState(params = {}) {
   }
 
   return buildResult({
-    repo, integrationBranch, task, pr, headSha, ci, review, cache,
+    repo, integrationBranch, task, integrationHead, pr, headSha, ci, review, cache,
     derivedState, reasons, signals,
   });
 }

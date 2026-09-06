@@ -85,7 +85,9 @@ function defaultNow() {
 }
 
 function assertSha(value, label) {
-  if (!isNonEmptyString(value)) fail(ERR.EVENT, `${label} must be a non-empty string`);
+  if (typeof value !== 'string' || !/^[0-9a-f]{40}$/i.test(value.trim())) {
+    fail(ERR.EVENT, `${label} must be a full 40-hex commit SHA`);
+  }
 }
 
 function evidenceForSha(evidence, expectedSha, expectedVerdict) {
