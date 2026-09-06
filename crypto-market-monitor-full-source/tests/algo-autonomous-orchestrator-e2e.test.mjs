@@ -30,6 +30,7 @@ function createSyntheticWorld() {
     checkRuns: [],
     review: null, // { sha, verdict, reviewerId }
     integratedShas: new Set(),
+    ledger: new Set(), // durable: task ids whose integration is recorded
     claudeInvocations: 0,
     mutatorCalls: [],
     reviewRequests: [],
@@ -91,13 +92,27 @@ function createSyntheticWorld() {
     world.review = { sha, verdict, reviewerId: 'chatgpt-independent-reviewer' };
   }
 
+  const integrationLedger = {
+    async hasIntegratedTask(taskId) { return world.ledger.has(taskId); },
+    async getIntegratedHead(taskId) { return world.ledger.has(taskId) ? world.branches[INTEGRATION_BRANCH] : null; },
+  };
+
   const mutators = {
     async integratePr(args) {
       world.mutatorCalls.push(['integratePr', args]);
       if (args.target === 'main') throw new Error('E2E_FORBIDDEN_MAIN_TARGET');
+      // Model a controlled merge: the task head becomes an ancestor of a NEW
+      // integration-branch merge commit, durable ledger is written, PR is
+      // marked merged, and post-integration CI runs GREEN on the new head.
       world.integratedShas.add(args.headSha);
-      world.branches[INTEGRATION_BRANCH] = args.headSha;
-      world.pr = null;
+      const mergeSha = nextSha();
+      world.branches[INTEGRATION_BRANCH] = mergeSha;
+      world.integratedShas.add(mergeSha);
+      world.ledger.add(args.taskId ?? TASK.id);
+      if (world.pr) world.pr = { ...world.pr, state: 'closed', merged: true };
+      world.checkRuns = REQUIRED_CHECKS.map((name, i) => ({
+        name, headSha: mergeSha, status: 'completed', conclusion: 'success', runId: `integ-${mergeSha.slice(-4)}-${i}`,
+      }));
     },
     async recordReviewRequest(args) { world.mutatorCalls.push(['recordReviewRequest', args]); },
     async recordApproval(args) { world.mutatorCalls.push(['recordApproval', args]); },
@@ -105,7 +120,7 @@ function createSyntheticWorld() {
     async postStatus(args) { world.mutatorCalls.push(['postStatus', args]); },
   };
 
-  return { world, github, reviewClient, mutators, simulateClaudeWork, advanceCi, postReview };
+  return { world, github, reviewClient, mutators, integrationLedger, simulateClaudeWork, advanceCi, postReview };
 }
 
 function buildLoop(env, { task, fenceToken = 1, currentLeaseToken = 1, planContext } = {}) {
@@ -119,7 +134,7 @@ function buildLoop(env, { task, fenceToken = 1, currentLeaseToken = 1, planConte
       async guardMutation(t, fn) { if (t !== currentLeaseToken) throw new Error('ORCHESTRATOR_STALE_FENCE'); return fn(); },
     },
     fenceToken,
-    reconcile: () => reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task, github: env.github }),
+    reconcile: () => reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task, github: env.github, integrationLedger: env.integrationLedger }),
     evaluateCi: async (headSha) => evaluateCiGate({
       headSha,
       requiredChecks: REQUIRED_CHECKS,

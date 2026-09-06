@@ -129,7 +129,7 @@ function buildResult(fields) {
 
 export async function reconcileGithubState(params = {}) {
   validateInput(params);
-  const { repo, integrationBranch, task, github, cache } = params;
+  const { repo, integrationBranch, task, github, cache, integrationLedger = null } = params;
   const requiredChecks = Array.isArray(task.requiredChecks) ? task.requiredChecks : [];
 
   const branchHead = await guarded('getBranchHead(task.branch)', () => github.getBranchHead(task.branch));
@@ -140,23 +140,58 @@ export async function reconcileGithubState(params = {}) {
     });
   }
 
-  // Crash-after-integration recovery: if the P0 branch already contains this
-  // head, the integration side effect happened — do not redispatch anything.
-  const alreadyIntegrated = await guarded(
-    'isAncestor(branchHead, integrationBranch)',
-    () => github.isAncestor(branchHead, integrationBranch),
+  const integrationHead = await guarded(
+    'getBranchHead(integrationBranch)',
+    () => github.getBranchHead(integrationBranch),
   );
-  if (alreadyIntegrated === true) {
-    return buildResult({
-      repo, integrationBranch, task, headSha: branchHead, cache,
-      derivedState: 'NEXT_TASK', reasons: ['ALREADY_INTEGRATED'],
-    });
-  }
 
   const pr = await guarded(
     'getOpenPullRequest',
     () => github.getOpenPullRequest({ headBranch: task.branch, baseBranch: integrationBranch }),
   );
+
+  // Ancestry is necessary but NOT sufficient for "integrated": a freshly cut
+  // task branch normally equals the integration head before Claude commits.
+  const ancestry = await guarded(
+    'isAncestor(branchHead, integrationBranch)',
+    () => github.isAncestor(branchHead, integrationBranch),
+  );
+
+  const mergedPr = !!(pr && pr.merged === true);
+  const ledgerIntegrated = integrationLedger
+    ? await guarded('integrationLedger.hasIntegratedTask', () => integrationLedger.hasIntegratedTask(task.id)) === true
+    : false;
+
+  // Fresh branch still at base with no PR / no durable evidence -> Claude owes work.
+  if (branchHead === integrationHead && !mergedPr && !ledgerIntegrated) {
+    return buildResult({
+      repo, integrationBranch, task, headSha: branchHead, cache,
+      derivedState: 'CLAUDE_WORKING', reasons: ['TASK_BRANCH_AT_BASE_NO_COMMITS'],
+    });
+  }
+
+  // "Integrated" requires DURABLE evidence (a merged PR or a ledger entry) in
+  // addition to ancestry — ancestry alone can be an out-of-band or fast-forward
+  // coincidence, so it must not advance the pipeline on its own.
+  if ((mergedPr || ledgerIntegrated) && ancestry === true) {
+    const integCiRaw = await guarded(
+      'getCiStatus(integrationHead)',
+      () => github.getCiStatus(integrationHead, requiredChecks),
+    );
+    const integCi = ciEvidence(integCiRaw, integrationHead);
+    if (integCi.state === 'GREEN' && integCi.matchesHead) {
+      return buildResult({
+        repo, integrationBranch, task, headSha: branchHead, ci: integCi, cache,
+        derivedState: 'NEXT_TASK', reasons: ['INTEGRATED_AND_VERIFIED'],
+      });
+    }
+    return buildResult({
+      repo, integrationBranch, task, headSha: branchHead, ci: integCi, cache,
+      derivedState: 'INTEGRATING',
+      reasons: ['ALREADY_INTEGRATED', 'POST_INTEGRATION_CI_PENDING'],
+    });
+  }
+
   if (!pr || !isNonEmptyString(pr.headSha)) {
     return buildResult({
       repo, integrationBranch, task, cache,

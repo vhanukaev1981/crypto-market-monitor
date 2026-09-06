@@ -207,11 +207,16 @@ test('a throwing github adapter surfaces as ORCHESTRATOR_RECONCILE_FAILED, never
   await assert.rejects(() => reconcile(gh), /ORCHESTRATOR_RECONCILE_FAILED/);
 });
 
-test('does not call CI/review lookups once the branch is already integrated', async () => {
-  const gh = fakeGithub({ ancestors: { [`${HEAD}->${INTEGRATION_BRANCH}`]: true } });
-  await reconcile(gh);
-  assert.equal(gh._calls.getCiStatus, 0);
-  assert.equal(gh._calls.getReviewVerdict, 0);
+test('once durably integrated, PR-head review lookups are skipped (only the integration head is verified)', async () => {
+  const gh = ghWithIntegration({
+    pr: { number: 77, headSha: HEAD, headRef: TASK.branch, baseRef: INTEGRATION_BRANCH, state: 'closed', merged: true },
+    ancestors: { [`${HEAD}->${INTEGRATION_BRANCH}`]: true },
+    ciBySha: { [INTEG_HEAD]: { sha: INTEG_HEAD, state: 'GREEN', runId: 'run-integ' } },
+  });
+  const r = await reconcileGithubState({ repo: REPO, integrationBranch: INTEGRATION_BRANCH, task: TASK, github: gh, integrationLedger: fakeLedger([TASK.id]) });
+  assert.equal(r.derivedState, 'NEXT_TASK');
+  assert.equal(gh._calls.getReviewVerdict, 0, 'no PR-head review lookup after integration');
+  assert.equal(gh._calls.getCiStatus, 1, 'exactly one CI lookup: the integration-head post-integration verification');
 });
 
 // ---------------------------------------------------------------------------
