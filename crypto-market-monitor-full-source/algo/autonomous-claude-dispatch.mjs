@@ -105,6 +105,12 @@ export function createClaudeDispatcher(config = {}) {
     if (!parsed || typeof parsed !== 'object' || !ALLOWED_COMPLETIONS.has(parsed.completion)) {
       return { invalid: true };
     }
+    // A headSha, if present, must be a full 40-hex SHA — a malformed worker
+    // marker must not pollute downstream exact-SHA state/evidence.
+    if (parsed.headSha !== undefined && parsed.headSha !== null
+      && !/^[0-9a-f]{40}$/i.test(String(parsed.headSha))) {
+      return { invalid: true };
+    }
     return { parsed };
   }
 

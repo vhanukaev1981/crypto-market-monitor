@@ -165,8 +165,15 @@ export function createOrchestratorStateMachine(config = {}) {
     for (const field of ['prNumber']) {
       if (!(snapshot[field] === null || Number.isInteger(snapshot[field]))) fail(ERR.SNAPSHOT, `snapshot.${field} invalid`);
     }
-    for (const field of ['baseSha', 'headSha', 'ciRunId', 'lastEventId']) {
+    for (const field of ['ciRunId', 'lastEventId']) {
       if (!(snapshot[field] === null || isNonEmptyString(snapshot[field]))) fail(ERR.SNAPSHOT, `snapshot.${field} invalid`);
+    }
+    // Persisted commit SHAs must be null or a full 40-hex — a corrupt/stale
+    // persisted snapshot must fail closed, not drive wrong exact-SHA checks.
+    for (const field of ['baseSha', 'headSha']) {
+      if (!(snapshot[field] === null || /^[0-9a-f]{40}$/i.test(String(snapshot[field] ?? '')))) {
+        fail(ERR.SNAPSHOT, `snapshot.${field} must be null or a full 40-hex SHA`);
+      }
     }
     if (!(snapshot.reviewEvidence === null || typeof snapshot.reviewEvidence === 'object')) {
       fail(ERR.SNAPSHOT, 'snapshot.reviewEvidence invalid');

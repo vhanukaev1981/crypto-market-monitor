@@ -165,7 +165,7 @@ async function liveAdapters(integrationBranch) {
     const cursor = await gh.readCursor();
     const id = (cursor && cursor.currentTaskId) || process.env.ALGOBOT_CURRENT_TASK_ID || 'p0-current';
     const branch = (cursor && cursor.currentBranch) || `agent/claude-${String(id).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-    return { id, branch, requiredChecks };
+    return { id, branch, requiredChecks, repository: repo };
   }
 
   const suppressedIntegrate = async (a) => { emit({ level: 'warn', msg: 'integration disabled (ALGOBOT_ENABLE_P0_INTEGRATION!=1)', args: a }); };
