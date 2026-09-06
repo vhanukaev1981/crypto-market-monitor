@@ -57,11 +57,19 @@ jobs:
         run: node --test --test-concurrency=1 tests/algo-autonomous-orchestrator-*.test.mjs tests/algo-autonomous-github-reconciler.test.mjs tests/algo-autonomous-claude-dispatch.test.mjs tests/algo-autonomous-ci-gate.test.mjs tests/algo-autonomous-review-gate.test.mjs tests/algo-autonomous-integration-gate.test.mjs
 
       - name: Orchestrator dry-run heartbeat tick
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p validation/autonomous-build-artifacts
+          # No `|| true`: a crash or a non-zero exit here MUST fail the heartbeat.
           node scripts/run-autonomous-orchestrator.mjs --dry-run --once \
-            > validation/autonomous-build-artifacts/orchestrator-heartbeat.json || true
-          cat validation/autonomous-build-artifacts/orchestrator-heartbeat.json
+            | tee validation/autonomous-build-artifacts/orchestrator-heartbeat.json
+          # Fail if any emitted line is a fatal / safety / unrecoverable signal.
+          if grep -Eq '"level":"fatal"|STOP_SAFETY|STOP_UNRECOVERABLE|UNRECOVERABLE_FAILURE|SAFETY_BLOCK' \
+              validation/autonomous-build-artifacts/orchestrator-heartbeat.json; then
+            echo "::error::orchestrator heartbeat reported a fatal/safety signal"
+            exit 1
+          fi
 
       - name: Produce fail-closed cycle decision
         run: |

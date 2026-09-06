@@ -90,3 +90,38 @@ returns `BLOCKED / DRY_RUN`. No Bybit, no LIVE trading, no write to `main`.
 
 **No autonomous change has been merged to `agent/algobot-p0-persistent-recovery`
 or `main`. No real Bybit order has been placed.**
+
+---
+
+## PR #19 independent review — round 2 (CHANGES_REQUIRED → addressed)
+
+ChatGPT independent review of `fd28366` returned **CHANGES_REQUIRED** (recorded on
+PR #19, tied to the exact SHA). All four critical blockers, the seven Codex
+inline threads, and the additional important fixes were addressed via strict
+RED → GREEN TDD:
+
+| Fix commit group | RED run | GREEN run | Scope |
+|---|---|---|---|
+| A `91b22b7` → `d46ef67` | [34058309499](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34058309499) ✗ | [34058356201](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34058356201) ✓ | full event-id dedup (not just `lastEventId`); reject completion markers on a nonzero Claude exit; CI-gate latest-run by timestamp/runId not array order; systemd `StartLimit*` moved to `[Unit]` |
+| B `265d7b1` → `fa18192` | [34058406256](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34058406256) ✗ | [34058520922](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34058520922) ✓ | reconciler: durable integration evidence (merged PR **or** ledger) + exact-SHA GREEN on the **integration branch head** before `NEXT_TASK`; a fresh branch == base is not "integrated" |
+| C `17d2ccc` → `ec8abf8` | [34058735337](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34058735337) ✗ | [34059001696](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34059001696) ✓ | loop threads the **real state machine + a durable `{snapshot,runtime}` store**: attempt counter & event dedup survive restart; lease **renewed every tick**, lost lease STOPS the daemon; permission-denied mutation → `STOP_PERMISSION`; malformed / auth review → `STOP_REVIEW_MALFORMED` / `STOP_REVIEW_ERROR`; plan-load failure → `STOP_PLAN_UNAVAILABLE`; review request id persisted, submitted once per head; script acquires the lease before building the loop |
+| D `871327b` → `858ddb6` | [34059075501](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34059075501) ✗ | (this PR head) ✓ | concrete live adapters: `createGithubRestAdapter`, `createGithubFileLeaseStore`, `createGithubStateStore`, `createClaudeCliRunner`, `parseP0Plan` (all injected-transport, unit-tested); `--live` wires them, integration stays suppressed unless `ALGOBOT_ENABLE_P0_INTEGRATION=1` |
+| E (this commit) | — | — | heartbeat workflow: `|| true` removed, `set -euo pipefail`, fails on any fatal/safety signal line; acceptance doc updated |
+
+### Coverage after round 2
+
+- The synthetic E2E now drives the loop through the **real** `createOrchestratorStateMachine`
+  and threads a durable state store; a controlled merge writes the ledger and a
+  merged PR, and `NEXT_TASK` requires GREEN CI on the integration branch head.
+- New failure-injection scenarios: durable bounded-retry across restarts →
+  `STOP_UNRECOVERABLE`; same failed run not double-counted; lease renewed each
+  tick; lost lease → daemon `STOPPED`; permission-denied mutation → `STOP_PERMISSION`;
+  malformed / unauthorised review → fail-closed stop; plan-load failure ≠ backlog
+  exhausted.
+- Isolated ALGO regression + autonomous family remain GREEN (family 201/201 after
+  Commit D).
+
+**Still true:** no autonomous change merged to `agent/algobot-p0-persistent-recovery`
+or `main`; no real Bybit order; Tasks 10–11 remain blocked on the host owner
+(shell access to `algobot-bybit-01`, provisioning the independent-review endpoint,
+and enabling `ALGOBOT_ENABLE_P0_INTEGRATION=1` after the smoke gate).
