@@ -201,3 +201,11 @@ test('a BLOCKED marker on a nonzero exit is also rejected — a clean block exit
   const dispatcher = dispatcherWith({ code: 137, stdout: 'ALGOBOT_COMPLETION_JSON: {"completion":"BLOCKED","reason":"oom"}', stderr: 'Killed' });
   await assert.rejects(() => dispatcher.dispatchClaudeTask(baseArgs()), /ORCHESTRATOR_DISPATCH_FAILED/);
 });
+
+// ChatGPT PR #19 re-review 2 — Commit H: a detached kick-off result is a valid
+// non-blocking outcome (DISPATCHED), not an unparseable completion.
+test('a detached kick-off result is accepted as DISPATCHED, not parsed for a marker', async () => {
+  const dispatcher = dispatcherWith({ code: null, stdout: '', stderr: '', detached: true, pid: 4242 });
+  const out = await dispatcher.dispatchClaudeTask(baseArgs());
+  assert.equal(out.completion, 'DISPATCHED');
+});

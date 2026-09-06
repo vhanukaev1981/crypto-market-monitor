@@ -368,7 +368,7 @@ export function createGithubStateStore(config = {}) {
 // ---------------------------------------------------------------------------
 
 export function createClaudeCliRunner(config = {}) {
-  const { claudeBin = 'claude', spawnImpl } = config;
+  const { claudeBin = 'claude', spawnImpl, detached = false } = config;
   let spawn = spawnImpl;
   if (typeof spawn !== 'function') {
     // Lazy import so the module loads without node:child_process in a browser test.
@@ -376,6 +376,15 @@ export function createClaudeCliRunner(config = {}) {
   }
 
   return async function runProcess({ command, args = [], input, cwd, timeoutMs = 3_600_000 } = {}) {
+    if (detached) {
+      // R2: a ~1h Claude run must not be held open inside one fenced mutation
+      // (lease TTL << runtime). Kick it off and return; the reconciler observes
+      // the pushed commits on a later tick.
+      const child = await spawn(command || claudeBin, args, { cwd, detached: true, stdio: input ? ['pipe', 'ignore', 'ignore'] : 'ignore' });
+      if (input && child.stdin && child.stdin.write) { child.stdin.write(input); child.stdin.end(); }
+      if (typeof child.unref === 'function') child.unref();
+      return { code: null, stdout: '', stderr: '', detached: true, pid: child.pid ?? null };
+    }
     const child = await spawn(command || claudeBin, args, { cwd });
     return new Promise((resolve, reject) => {
       let stdout = '';

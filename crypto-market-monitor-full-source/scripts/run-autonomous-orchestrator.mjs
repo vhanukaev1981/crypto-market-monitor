@@ -144,7 +144,12 @@ async function liveAdapters(integrationBranch) {
   }
   const reviewGate = createReviewGate({ reviewClient });
 
-  const dispatcher = createClaudeDispatcher({ runProcess: createClaudeCliRunner({ claudeBin: process.env.ALGOBOT_CLAUDE_BIN || 'claude' }) });
+  // Detached kick-off: Claude may run for ~1h; the daemon must not block a
+  // fenced mutation for the whole run (lease TTL << runtime). Claude pushes its
+  // dedicated branch / opens the PR; the reconciler observes it on a later tick.
+  const dispatcher = createClaudeDispatcher({
+    runProcess: createClaudeCliRunner({ claudeBin: process.env.ALGOBOT_CLAUDE_BIN || 'claude', detached: true }),
+  });
 
   // The current task/branch are re-derived from the DURABLE control-branch
   // cursor on every tick — never a fixed closure.

@@ -125,3 +125,31 @@ RED → GREEN TDD:
 or `main`; no real Bybit order; Tasks 10–11 remain blocked on the host owner
 (shell access to `algobot-bybit-01`, provisioning the independent-review endpoint,
 and enabling `ALGOBOT_ENABLE_P0_INTEGRATION=1` after the smoke gate).
+
+---
+
+## PR #19 independent re-review 2 (CHANGES_REQUIRED on 140d881) — addressed
+
+Fix commit groups F–H, each RED test-only commit → failing CI, each fix commit → passing CI:
+
+| Group | RED → GREEN | Blockers |
+|---|---|---|
+| F `81d60cd` → `a573f71` | [34060067336](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34060067336) ✗ / [34060274695](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34060274695) ✓ | **R1** every control-plane read/write pinned to a non-protected `controlBranch` (`?ref=` + `body.branch`); **R2 backend** `leaseCheck()` at commit time; **R6** trusted-author review markers + `reviewerId` + malformed surfaced; **I-a** 401/403 → `ORCHESTRATOR_ADAPTER_AUTH` (not transient); **I-b** `getCiStatus` per-check in one call, empty required-checks refused; **I-c** plan DONE from ~~strike~~/**DONE**/(status); **I-d** ledger write failure propagates |
+| G `fa79772` → `344e8ee` | [34060386379](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34060386379) ✗ / [34060576650](https://github.com/vhanukaev1981/crypto-market-monitor/actions/runs/34060576650) ✓ | **R5** load IO error → `STOP_STATE_UNAVAILABLE`, invalid snapshot → `STOP_STATE_INVALID`, save failure → `STOP_STATE_PERSIST_FAILED` (decision not executed); **R2 loop** fence re-asserted immediately before each mutation; **R3** durable control-branch task cursor + fresh `agent/claude-*` branch + real P0 head base SHA (never zeros); **R4** review-request intent persisted before submit, id re-persisted after, submitted once per head; canonical `recordApproval` evidence; `integratePr` carries `taskId` |
+| H (this) | — | **R2** Claude dispatch is a detached kick-off (`{ detached: true }`) — a ~1h run is never held open inside a fenced mutation; the dispatcher accepts `DISPATCHED` |
+
+### Prior-review disposition (round 1 items) — all confirmed fixed
+fresh-branch ancestry, acquired-token propagation, lease renew/reacquire, full
+event-id dedup, nonzero Claude-exit rejection, systemd `StartLimit` placement,
+heartbeat failure propagation, pure CI latest-run ordering.
+
+### Corrections to earlier overstatements
+- Live adapters are now genuinely control-branch-isolated and fenced at commit
+  time; the earlier "live guarantees" claims that predated F/G are superseded by
+  this section.
+- `--live` additionally refuses to start without a non-protected
+  `ALGOBOT_CONTROL_BRANCH` and a non-empty `ALGOBOT_REQUIRED_CHECKS`.
+
+Regression after H: autonomous family **221/221**; full isolated ALGO regression
+GREEN; `--dry-run --once` exit 0. No merge to `agent/algobot-p0-persistent-recovery`
+or `main`; no real Bybit order; Tasks 10–11 remain owner-blocked.

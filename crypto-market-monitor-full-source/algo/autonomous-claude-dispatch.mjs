@@ -150,6 +150,22 @@ export function createClaudeDispatcher(config = {}) {
     }
     if (!result || typeof result !== 'object') fail(ERR.FAILED, 'runProcess returned no result');
 
+    // A detached kick-off is a valid non-blocking outcome: Claude was launched
+    // and will push its dedicated branch / open the PR; the reconciler observes
+    // it on a later tick. There is no marker to parse.
+    if (result.detached === true) {
+      return Object.freeze({
+        completion: 'DISPATCHED',
+        branch,
+        baseSha,
+        attempt,
+        headSha: null,
+        prNumber: null,
+        reason: null,
+        raw: Object.freeze({ code: null, pid: result.pid ?? null, detached: true }),
+      });
+    }
+
     // A completion marker is only trustworthy from a worker that exited
     // successfully. A nonzero exit means a later step (push, cleanup, ...)
     // failed even if the marker line was already printed.
