@@ -491,3 +491,121 @@ test('R4: an APPROVED verdict is written as canonical evidence via recordApprova
   assert.equal(calls[0].sha, HEAD);
   assert.equal(calls[0].reviewerId, 'chatgpt-independent');
 });
+
+// ===========================================================================
+// ChatGPT PR #19 re-review 3 — Commit J (loop end-to-end control flow).
+// B1: a freshly selected task must actually get Claude DISPATCHED.
+// B2: a detached dispatch is durable; the loop never re-dispatches the same
+//     task/branch (same tick, next tick, or after restart).
+// B4: a crash after the review endpoint ACCEPTED the submit but before the id
+//     persisted must poll + adopt, not re-submit.
+// B6: reconcile() ADAPTER_AUTH -> STOP_PERMISSION (not transient); run() STOPS
+//     on LEASE_LOST (no reacquire-continue).
+// Copilot loop:275: no synthetic-id poll before a request exists.
+// ===========================================================================
+
+test('B1: a freshly selected task actually gets Claude dispatched (not stuck at AWAIT)', async () => {
+  const store = memStateStore();
+  const dispatched = [];
+  const INTEG_HEAD = 'ee'.repeat(20);
+  let phase = 'nexttask';
+  const loop = () => durableLoop({
+    stateStore: store,
+    dispatchClaude: async ({ reconciled }) => { dispatched.push(reconciled.taskId); return { completion: 'DISPATCHED' }; },
+    reconcile: async () => (phase === 'nexttask'
+      ? { derivedState: 'NEXT_TASK', headSha: INTEG_HEAD, integrationHead: INTEG_HEAD, integrationBranch: INTEGRATION_BRANCH, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }
+      // after recordNextTask, the new task branch sits at the integration head, no PR yet
+      : { derivedState: 'TASK_READY', headSha: INTEG_HEAD, integrationHead: INTEG_HEAD, integrationBranch: INTEGRATION_BRANCH, repo: REPO, branch: 'agent/claude-p0-task-4-x', taskId: 'p0-task-4-x', pr: null }),
+    planContext: async () => ({ plan: { tasks: [{ id: 'p0-task-3', dependsOn: [], status: 'DONE' }, { id: 'p0-task-4-x', dependsOn: ['p0-task-3'], status: 'PENDING' }] }, completedGates: ['p0-task-3'] }),
+    mutators: { ...makeMutators(), async recordNextTask() { phase = 'taskready'; } },
+  });
+  const r1 = await loop().runOnce();
+  assert.equal(r1.action, 'SELECT_NEXT_TASK');
+  const r2 = await loop().runOnce();
+  assert.equal(r2.action, 'DISPATCH_CLAUDE');
+  assert.deepEqual(dispatched, ['p0-task-4-x']);
+});
+
+test('B2: a detached dispatch is not repeated on the next tick or after restart', async () => {
+  const store = memStateStore();
+  let dispatches = 0;
+  const HH = '11'.repeat(20);
+  const mk = () => durableLoop({
+    stateStore: store,
+    dispatchClaude: async () => { dispatches += 1; return { completion: 'DISPATCHED' }; },
+    reconcile: async () => ({ derivedState: 'TASK_READY', headSha: HH, integrationHead: HH, integrationBranch: INTEGRATION_BRANCH, repo: REPO, branch: 'agent/claude-p0-task-4-x', taskId: 'p0-task-4-x', pr: null }),
+    planContext: async () => ({ plan: { tasks: [{ id: 'p0-task-4-x', dependsOn: [], status: 'PENDING' }] }, completedGates: [] }),
+  });
+  await mk().runOnce(); // dispatch
+  await mk().runOnce(); // same GitHub state -> must NOT re-dispatch
+  await mk().runOnce(); // restart -> must NOT re-dispatch
+  assert.equal(dispatches, 1);
+  assert.ok(store._peek().runtime.dispatch, 'the dispatch is recorded durably');
+});
+
+test('B4: crash after an accepted submit -> next tick polls + adopts, never re-submits', async () => {
+  const store = memStateStore();
+  let submits = 0;
+  let pollCalls = 0;
+  const reviewGate = {
+    configured: true,
+    async requestIndependentReview() { submits += 1; return { status: 'REQUESTED', requestId: 'rr-accepted', headSha: HEAD }; },
+    async fetchReviewOutcome(id) {
+      pollCalls += 1;
+      // the endpoint keys by sha: it already has the accepted request
+      return { status: 'PENDING', requestId: 'rr-accepted' };
+    },
+  };
+  // 1) first loop: persist the intent, submit succeeds, but we simulate a crash
+  //    BEFORE the id is persisted by wrapping stateStore.save to throw once
+  //    after the intent write.
+  let saves = 0;
+  const crashingStore = {
+    async load() { return store._peek(); },
+    async save(b) { saves += 1; if (saves === 2) throw new Error("crash before id persisted"); await store.save(b); },
+  };
+  const base = {
+    stateStore: crashingStore,
+    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate,
+  };
+  await durableLoop(base).runOnce().catch(() => {});
+  assert.equal(submits, 1);
+  // 2) recovery tick with the real store
+  await durableLoop({ ...base, stateStore: store }).runOnce();
+  assert.equal(submits, 1, 'no duplicate paid submission after an accepted-but-uncommitted request');
+  assert.equal(store._peek().runtime.reviewRequestId, 'rr-accepted');
+});
+
+test('B6a: reconcile() ADAPTER_AUTH stops fail-closed (STOP_PERMISSION), not a transient retry', async () => {
+  const loop = durableLoop({
+    reconcile: async () => { throw new Error('ORCHESTRATOR_ADAPTER_AUTH: GitHub 403 on /git/ref/heads/x'); },
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'STOP_PERMISSION');
+});
+
+test('B6b: run() STOPS on LEASE_LOST (no reacquire-and-continue split-brain)', async () => {
+  const loop = durableLoop({ lease: renewableLease({ expired: true }) });
+  const summary = await loop.run({ intervalMs: 1, maxTicks: 4 });
+  assert.equal(summary.status, 'STOPPED');
+  assert.match(summary.reason, /LEASE/);
+});
+
+test('Copilot loop:275: gatherReview does not poll with a synthetic id before any request exists', async () => {
+  let polls = 0;
+  const reviewGate = {
+    configured: true,
+    async requestIndependentReview() { return { status: 'REQUESTED', requestId: 'rr-x', headSha: HEAD }; },
+    async fetchReviewOutcome() { polls += 1; throw new Error('unknown request id'); },
+  };
+  const loop = durableLoop({
+    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate,
+  });
+  const r = await loop.runOnce();
+  assert.equal(polls, 0, 'no fetchReviewOutcome before a request is submitted');
+  assert.equal(r.action, 'REQUEST_REVIEW');
+});
