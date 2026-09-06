@@ -1,0 +1,2 @@
+run=35
+reason=validate fixed predeclared structural buckets on BTCUSDT 2020-2024 alpha folds

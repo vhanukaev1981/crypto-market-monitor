@@ -1,0 +1,60 @@
+name: ALGO V2 Bybit READ_ONLY Connectivity
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/algo-v2-bybit-readonly-transport
+    paths:
+      - .github/workflows/algo-v2-bybit-readonly-connectivity.yml
+      - crypto-market-monitor-full-source/algo/bybit-live-adapter.mjs
+      - crypto-market-monitor-full-source/algo/bybit-v5-readonly-transport.mjs
+      - crypto-market-monitor-full-source/scripts/run-bybit-readonly-diagnostic.mjs
+      - crypto-market-monitor-full-source/tests/algo-bybit-live-adapter.test.mjs
+      - crypto-market-monitor-full-source/tests/algo-bybit-readonly-transport.test.mjs
+      - crypto-market-monitor-full-source/tests/algo-bybit-readonly-diagnostic.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  safety-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+      - name: Run READ_ONLY safety regression
+        working-directory: crypto-market-monitor-full-source
+        run: node --test tests/algo-bybit-live-adapter.test.mjs tests/algo-bybit-readonly-transport.test.mjs tests/algo-bybit-readonly-diagnostic.test.mjs
+
+  readonly-connectivity:
+    needs: safety-regression
+    # Bybit documents that US-origin IPs receive HTTP 403. GitHub-hosted runners
+    # can execute from US regions (the failed run was westus3), so authenticated
+    # exchange connectivity must run on an explicitly controlled non-US runner.
+    runs-on: [self-hosted, linux, x64, bybit-non-us]
+    timeout-minutes: 5
+    env:
+      BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
+      BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+      - name: Verify secrets are present without printing values
+        shell: bash
+        run: |
+          test -n "$BYBIT_API_KEY" || { echo 'BYBIT_API_KEY is missing'; exit 2; }
+          test -n "$BYBIT_API_SECRET" || { echo 'BYBIT_API_SECRET is missing'; exit 2; }
+          echo 'Required Bybit secrets are present.'
+      - name: Run authenticated READ_ONLY account diagnostic
+        working-directory: crypto-market-monitor-full-source
+        run: node scripts/run-bybit-readonly-diagnostic.mjs
