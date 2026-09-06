@@ -369,3 +369,125 @@ test('a permission-denied mutation fails closed (STOP_PERMISSION) and stops the 
   const summary = await loop.run({ intervalMs: 1, maxTicks: 3 });
   assert.equal(summary.status, 'STOPPED');
 });
+
+// ===========================================================================
+// ChatGPT PR #19 re-review 2 — Commit G (durable state fail-closed, atomic
+// fence at mutation, real next-task handoff, review-request durability).
+// ===========================================================================
+
+test('R5: a stateStore.load() IO error STOPS the tick fail-closed, no mutation', async () => {
+  const mutators = makeMutators();
+  const loop = durableLoop({
+    mutators,
+    stateStore: { async load() { throw new Error('EIO: state file unreadable'); }, async save() {} },
+    reconcile: async () => ({ derivedState: 'APPROVED_FOR_INTEGRATION', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate: fakeReviewGate({ status: 'COMPLETE', evidence: { verdict: 'APPROVED_FOR_INTEGRATION', sha: HEAD, reviewerId: 'chatgpt' } }),
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'STOP_STATE_UNAVAILABLE');
+  assert.equal(mutators.calls.filter(([n]) => n === 'integratePr').length, 0);
+});
+
+test('R5: a persisted-but-invalid snapshot STOPS fail-closed (no silent reset)', async () => {
+  const store = { async load() { return { snapshot: { state: 'NOT_A_REAL_STATE', version: 1 }, runtime: {} }; }, async save() {} };
+  const loop = durableLoop({
+    stateStore: store,
+    reconcile: async () => ({ derivedState: 'CI_RUNNING', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'STOP_STATE_INVALID');
+});
+
+test('R5: a stateStore.save() failure STOPS and does NOT execute the decision', async () => {
+  const mutators = makeMutators();
+  const loop = durableLoop({
+    mutators,
+    stateStore: { async load() { return null; }, async save() { throw new Error('ORCHESTRATOR_ADAPTER_AUTH: 403 on state PUT'); } },
+    reconcile: async () => ({ derivedState: 'APPROVED_FOR_INTEGRATION', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate: fakeReviewGate({ status: 'COMPLETE', evidence: { verdict: 'APPROVED_FOR_INTEGRATION', sha: HEAD, reviewerId: 'chatgpt' } }),
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'STOP_STATE_PERSIST_FAILED');
+  assert.equal(mutators.calls.filter(([n]) => n === 'integratePr').length, 0);
+});
+
+test('R2: the lease fence is re-asserted immediately before each mutation', async () => {
+  let asserts = 0;
+  const lease = {
+    async renewLease() { return { fenceToken: 7 }; },
+    async assertLease() { asserts += 1; if (asserts >= 2) throw new Error('ORCHESTRATOR_STALE_FENCE: taken over between assert and act'); return true; },
+    async guardMutation(t, fn) { await this.assertLease(t); return fn(); },
+    async adoptLease() { throw new Error('ORCHESTRATOR_LEASE_NOT_HELD'); },
+    async acquireLease() { throw new Error('ORCHESTRATOR_LEASE_HELD'); },
+  };
+  const mutators = makeMutators();
+  const loop = durableLoop({
+    lease,
+    mutators,
+    reconcile: async () => ({ derivedState: 'APPROVED_FOR_INTEGRATION', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate: fakeReviewGate({ status: 'COMPLETE', evidence: { verdict: 'APPROVED_FOR_INTEGRATION', sha: HEAD, reviewerId: 'chatgpt' } }),
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.status, 'LEASE_LOST');
+  assert.equal(mutators.calls.filter(([n]) => n === 'integratePr').length, 0, 'no mutation once the fence is lost');
+});
+
+test('R3: SELECT_NEXT_TASK records a fresh branch + real base sha via recordNextTask', async () => {
+  const calls = [];
+  const mutators = { ...makeMutators(), async recordNextTask(a) { calls.push(a); } };
+  const INTEG_HEAD = 'ee'.repeat(20);
+  const loop = durableLoop({
+    mutators,
+    reconcile: async () => ({ derivedState: 'NEXT_TASK', headSha: INTEG_HEAD, integrationHead: INTEG_HEAD, integrationBranch: INTEGRATION_BRANCH, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3' }),
+    planContext: async () => ({ plan: { tasks: [{ id: 'p0-task-3-executor-fencing', dependsOn: [], status: 'DONE' }, { id: 'p0-task-4-live-canary', dependsOn: ['p0-task-3-executor-fencing'], status: 'PENDING' }] }, completedGates: ['p0-task-3-executor-fencing'] }),
+  });
+  const r = await loop.runOnce();
+  assert.equal(r.action, 'SELECT_NEXT_TASK');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].taskId, 'p0-task-4-live-canary');
+  assert.match(calls[0].branch, /^agent\/claude-/);
+  assert.equal(calls[0].baseSha, INTEG_HEAD);
+  assert.notMatch(calls[0].baseSha, /^0+$/);
+});
+
+test('R4: the review-request intent is persisted BEFORE submitting; a failed submit is retried at most once', async () => {
+  const store = memStateStore();
+  let submits = 0;
+  const reviewGate = {
+    configured: true,
+    async requestIndependentReview() { submits += 1; if (submits === 1) throw new Error('review submit 503'); return { status: 'REQUESTED', requestId: 'rr-2', headSha: HEAD }; },
+    async fetchReviewOutcome() { return { status: 'PENDING' }; },
+  };
+  const mk = () => durableLoop({
+    stateStore: store,
+    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate,
+  });
+  await mk().runOnce().catch(() => {}); // submit throws -> intent persisted, no id
+  assert.equal(store._peek().runtime.pendingReviewFor, HEAD);
+  assert.equal(store._peek().runtime.reviewRequestId ?? null, null);
+  await mk().runOnce(); // retry
+  assert.equal(submits, 2);
+  await mk().runOnce(); // id now present -> no third submit
+  assert.equal(submits, 2);
+});
+
+test('R4: an APPROVED verdict is written as canonical evidence via recordApproval', async () => {
+  const calls = [];
+  const mutators = { ...makeMutators(), async recordApproval(a) { calls.push(a); } };
+  const loop = durableLoop({
+    mutators,
+    reconcile: async () => ({ derivedState: 'READY_FOR_CHATGPT_REVIEW', headSha: HEAD, integrationBranch: INTEGRATION_BRANCH, pr: { number: 5, headSha: HEAD }, repo: REPO, branch: CLAUDE_BRANCH, taskId: 'p0-task-3', evidence: { ci: { runId: 'r' } } }),
+    evaluateCi: async () => ({ outcome: 'GREEN', headSha: HEAD }),
+    reviewGate: fakeReviewGate({ status: 'COMPLETE', evidence: { verdict: 'APPROVED_FOR_INTEGRATION', sha: HEAD, reviewerId: 'chatgpt-independent' } }),
+  });
+  await loop.runOnce();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].verdict, 'APPROVED_FOR_INTEGRATION');
+  assert.equal(calls[0].sha, HEAD);
+  assert.equal(calls[0].reviewerId, 'chatgpt-independent');
+});
