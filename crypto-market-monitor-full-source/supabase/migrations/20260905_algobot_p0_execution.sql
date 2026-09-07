@@ -1,3 +1,12 @@
+-- Serialize the whole migration behind an advisory lock inside a single
+-- transaction. Postgres DDL guarded by IF NOT EXISTS is not safe against true
+-- concurrent execution (two sessions can both pass the existence check before
+-- either commits), so without this lock concurrently applying this migration
+-- from multiple processes/tests can raise spurious duplicate-key errors on
+-- catalog objects even though the migration is otherwise idempotent.
+begin;
+select pg_advisory_xact_lock(hashtext('algobot_p0_execution_migration'));
+
 create extension if not exists pgcrypto;
 
 create table if not exists public.execution_ledger (
@@ -73,3 +82,191 @@ create index if not exists position_lifecycle_status_idx
   on public.position_lifecycle (status);
 create index if not exists canary_reservations_status_idx
   on public.canary_reservations (status);
+
+-- Atomically reserves CANARY budget for a single order_link_id. Locks the
+-- singleton bot_state_meta row so per-order and cumulative caps can never be
+-- oversubscribed by concurrent workers, and validates the caller's executor
+-- fencing token in the same transaction.
+create or replace function public.algobot_reserve_canary(
+  p_order_link_id text,
+  p_requested_notional_usdt numeric,
+  p_executor_fence_token bigint
+) returns table (
+  reservation_id uuid,
+  reserved_notional_usdt numeric,
+  total_authorized_usdt numeric
+) as $$
+declare
+  v_meta public.bot_state_meta%rowtype;
+  v_execution_id uuid;
+  v_committed_total numeric;
+  v_reservation_id uuid;
+begin
+  select * into v_meta from public.bot_state_meta where singleton_key = 'ALGOBOT' for update;
+  if not found then
+    raise exception 'bot_state_meta singleton row missing';
+  end if;
+
+  if p_executor_fence_token <> v_meta.executor_fence_token then
+    raise exception 'stale executor fence token: expected %, got %', v_meta.executor_fence_token, p_executor_fence_token;
+  end if;
+
+  if p_requested_notional_usdt > v_meta.max_order_notional_usdt then
+    raise exception 'reservation of % USDT exceeds max order notional limit of % USDT', p_requested_notional_usdt, v_meta.max_order_notional_usdt;
+  end if;
+
+  select id into v_execution_id
+    from public.execution_ledger
+    where order_link_id = p_order_link_id;
+  if v_execution_id is null then
+    raise exception 'no execution_ledger row found for order_link_id %', p_order_link_id;
+  end if;
+
+  if exists (select 1 from public.canary_reservations where order_link_id = p_order_link_id) then
+    -- canary_reservations.order_link_id already has a unique constraint, so
+    -- this check is intentionally redundant with it: it turns what would
+    -- otherwise be an opaque unique-violation error into a clear message.
+    raise exception 'a CANARY reservation already exists for order_link_id %', p_order_link_id;
+  end if;
+
+  -- All CANARY budget accounting reads/writes below happen while this
+  -- function still holds the bot_state_meta row lock acquired above, which
+  -- is what makes the aggregate sum-then-insert sequence race-free. Any
+  -- other code path that writes to canary_reservations must take the same
+  -- bot_state_meta lock first to preserve this invariant.
+  select coalesce(sum(canary_reservations.reserved_notional_usdt), 0) into v_committed_total
+    from public.canary_reservations
+    where status in ('RESERVED', 'COMMITTED');
+
+  if v_committed_total + p_requested_notional_usdt > v_meta.max_cumulative_notional_usdt then
+    raise exception 'reservation of % USDT would exceed max cumulative notional limit of % USDT', p_requested_notional_usdt, v_meta.max_cumulative_notional_usdt;
+  end if;
+
+  insert into public.canary_reservations(
+    execution_id, order_link_id, reserved_notional_usdt, status, executor_fence_token
+  ) values (
+    v_execution_id, p_order_link_id, p_requested_notional_usdt, 'RESERVED', p_executor_fence_token
+  ) returning id into v_reservation_id;
+
+  return query select v_reservation_id, p_requested_notional_usdt, v_committed_total + p_requested_notional_usdt;
+end;
+$$ language plpgsql;
+
+-- Commits a RESERVED reservation to its verified filled notional.
+--
+-- Safety invariants (ChatGPT independent review of PR #18):
+--   1. A commit can never authorize more CANARY budget than was reserved for
+--      this order: p_filled_notional_usdt must be > 0 and <= the amount that
+--      was originally reserved.
+--   2. Fail closed, never silent no-op: a reservation id that does not exist,
+--      or a reservation that is RELEASED, raises. An already-COMMITTED
+--      reservation is idempotent ONLY when replayed with the identical filled
+--      notional; a conflicting amount raises.
+create or replace function public.algobot_commit_canary_reservation(
+  p_reservation_id uuid,
+  p_filled_notional_usdt numeric,
+  p_executor_fence_token bigint
+) returns void as $$
+declare
+  v_meta public.bot_state_meta%rowtype;
+  v_reservation public.canary_reservations%rowtype;
+begin
+  select * into v_meta from public.bot_state_meta where singleton_key = 'ALGOBOT' for update;
+  if not found then
+    raise exception 'bot_state_meta singleton row missing';
+  end if;
+
+  if p_executor_fence_token <> v_meta.executor_fence_token then
+    raise exception 'stale executor fence token: expected %, got %', v_meta.executor_fence_token, p_executor_fence_token;
+  end if;
+
+  -- Lock the reservation row (also under the bot_state_meta lock held above)
+  -- and fail closed if it is not there at all.
+  select * into v_reservation from public.canary_reservations
+    where id = p_reservation_id
+    for update;
+  if not found then
+    raise exception 'no CANARY reservation found for id %', p_reservation_id;
+  end if;
+
+  if p_filled_notional_usdt is null or p_filled_notional_usdt <= 0 then
+    raise exception 'commit filled notional must be positive, got % for reservation %', p_filled_notional_usdt, p_reservation_id;
+  end if;
+
+  if v_reservation.status = 'RELEASED' then
+    raise exception 'cannot commit reservation % because it is RELEASED', p_reservation_id;
+  end if;
+
+  if v_reservation.status = 'COMMITTED' then
+    -- Replayed exchange evidence: a no-op only when it agrees with what was
+    -- already committed. A different amount is a real accounting conflict.
+    if p_filled_notional_usdt <> v_reservation.reserved_notional_usdt then
+      raise exception 'reservation % already COMMITTED at % USDT; refusing conflicting commit of % USDT',
+        p_reservation_id, v_reservation.reserved_notional_usdt, p_filled_notional_usdt;
+    end if;
+    return;
+  end if;
+
+  -- v_reservation.status = 'RESERVED'
+  if p_filled_notional_usdt > v_reservation.reserved_notional_usdt then
+    raise exception 'commit of % USDT exceeds the reserved amount of % USDT for reservation %',
+      p_filled_notional_usdt, v_reservation.reserved_notional_usdt, p_reservation_id;
+  end if;
+
+  update public.canary_reservations
+    set reserved_notional_usdt = p_filled_notional_usdt,
+        status = 'COMMITTED',
+        updated_at = now()
+    where id = p_reservation_id;
+end;
+$$ language plpgsql;
+
+-- Releases a RESERVED reservation (e.g. after proven non-dispatch) so its
+-- notional no longer counts against the CANARY budget.
+--
+-- Safety invariant (ChatGPT independent review of PR #18): fail closed, never
+-- silent no-op. A reservation id that does not exist, or a reservation that is
+-- COMMITTED, raises. Re-releasing an already-RELEASED reservation is the one
+-- idempotent case.
+create or replace function public.algobot_release_canary_reservation(
+  p_reservation_id uuid,
+  p_reason text,
+  p_executor_fence_token bigint
+) returns void as $$
+declare
+  v_meta public.bot_state_meta%rowtype;
+  v_reservation public.canary_reservations%rowtype;
+begin
+  select * into v_meta from public.bot_state_meta where singleton_key = 'ALGOBOT' for update;
+  if not found then
+    raise exception 'bot_state_meta singleton row missing';
+  end if;
+
+  if p_executor_fence_token <> v_meta.executor_fence_token then
+    raise exception 'stale executor fence token: expected %, got %', v_meta.executor_fence_token, p_executor_fence_token;
+  end if;
+
+  select * into v_reservation from public.canary_reservations
+    where id = p_reservation_id
+    for update;
+  if not found then
+    raise exception 'no CANARY reservation found for id %', p_reservation_id;
+  end if;
+
+  if v_reservation.status = 'RELEASED' then
+    return;
+  end if;
+
+  if v_reservation.status = 'COMMITTED' then
+    raise exception 'cannot release reservation % because it is COMMITTED', p_reservation_id;
+  end if;
+
+  -- v_reservation.status = 'RESERVED'
+  update public.canary_reservations
+    set status = 'RELEASED',
+        updated_at = now()
+    where id = p_reservation_id;
+end;
+$$ language plpgsql;
+
+commit;
