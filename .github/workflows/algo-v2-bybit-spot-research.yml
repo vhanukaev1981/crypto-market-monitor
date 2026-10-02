@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/algo-v2-core-v1
+      - agent/algo-v2-hardening-v1
     paths:
       - '.github/workflows/algo-v2-bybit-spot-research.yml'
       - 'crypto-market-monitor-full-source/algo/bybit-trade-stream-import.mjs'
@@ -14,8 +15,21 @@ on:
       - 'crypto-market-monitor-full-source/algo/trend-pullback-backtest.mjs'
       - 'crypto-market-monitor-full-source/algo/structural-trade-annotation.mjs'
       - 'crypto-market-monitor-full-source/algo/structural-bucket-attribution.mjs'
+      - 'crypto-market-monitor-full-source/algo/risk-engine.mjs'
+      - 'crypto-market-monitor-full-source/algo/paper-executor.mjs'
+      - 'crypto-market-monitor-full-source/algo/execution-gateway.mjs'
+      - 'crypto-market-monitor-full-source/algo/paper-readiness.mjs'
+      - 'crypto-market-monitor-full-source/algo/portfolio-pnl.mjs'
+      - 'crypto-market-monitor-full-source/algo/autonomous-build-state.mjs'
+      - 'crypto-market-monitor-full-source/algo/autonomous-build-queue.mjs'
+      - 'crypto-market-monitor-full-source/algo/autonomous-permission-boundary.mjs'
+      - 'crypto-market-monitor-full-source/algo/autonomous-build-cycle.mjs'
+      - 'crypto-market-monitor-full-source/algo/autonomous-action-dispatch.mjs'
+      - 'crypto-market-monitor-full-source/algo/live-canary-policy.mjs'
       - 'crypto-market-monitor-full-source/tests/**'
+      - 'crypto-market-monitor-full-source/scripts/run-autonomous-build-cycle.mjs'
       - 'crypto-market-monitor-full-source/scripts/run-bybit-spot-research.mjs'
+      - 'crypto-market-monitor-full-source/validation/autonomous-build-state.json'
       - 'crypto-market-monitor-full-source/validation/SOURCE_PROVENANCE.md'
       - 'crypto-market-monitor-full-source/validation/algo-v2-candidate-freeze.json'
       - 'crypto-market-monitor-full-source/validation/bybit-spot-research-trigger.txt'
@@ -23,6 +37,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: algo-v2-bybit-spot-research-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   spot-research:

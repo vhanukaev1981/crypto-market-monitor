@@ -27,6 +27,21 @@ test('rejects duplicate or backward timestamps', () => {
   assert.throws(()=>quality.repairMinorHourlyGaps([c(1,101),c(1,101)],{maxGapHours:3}),/NON_MONOTONIC_HOURLY_DATA/);
 });
 
+test('repair rejects hourly input that is not aligned even when it contains one candle', () => {
+  const bad={...c(0,100),time:'2026-01-01T00:30:00.000Z'};
+  assert.throws(()=>quality.repairMinorHourlyGaps([bad],{maxGapHours:3}),/MISALIGNED_HOURLY_DATA/);
+});
+
+test('repair rejects invalid prices volume and OHLC before synthesizing data', () => {
+  for (const bad of [
+    c(0,0),
+    c(0,100,-1),
+    {...c(0,100),high:99},
+  ]) {
+    assert.throws(()=>quality.repairMinorHourlyGaps([bad],{maxGapHours:3}),/INVALID_HOURLY_(PRICE|VOLUME|OHLC)/);
+  }
+});
+
 test('exports a strict canonical hourly validator', () => {
   assert.equal(typeof quality.validateStrictHourlyCandles,'function');
 });

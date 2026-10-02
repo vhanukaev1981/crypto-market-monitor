@@ -8,6 +8,13 @@ function engine() {
   return new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: 10, slippageBps: 5 });
 }
 
+test('rejects invalid fee and slippage configuration fail-closed', () => {
+  assert.throws(() => new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: -1, slippageBps: 0 }), /INVALID_EXECUTION_COSTS/);
+  assert.throws(() => new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: 0, slippageBps: -1 }), /INVALID_EXECUTION_COSTS/);
+  assert.throws(() => new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: Number.NaN, slippageBps: 0 }), /INVALID_EXECUTION_COSTS/);
+  assert.throws(() => new PaperExecutionEngine({ startingCash: 1000, takerFeeBps: 0, slippageBps: Number.POSITIVE_INFINITY }), /INVALID_EXECUTION_COSTS/);
+});
+
 test('market buy uses ask plus slippage and charges fee', () => {
   const e = engine();
   e.createOrder({ clientOrderId: 'o1', symbol: 'ETHUSDT', side: 'BUY', qty: 1 });
@@ -75,6 +82,56 @@ test('state can be restored after restart without losing idempotency', () => {
   const finalFill = restored.applyMarketFill({ fillId: 'restore-fill-2', clientOrderId: 'restore', qty: 1, bid: 99, ask: 100 });
   assert.equal(finalFill.order.status, 'FILLED');
   assert.equal(restored.snapshot().positions.ETHUSDT.qty, 2);
+});
+
+test('restart state validation rejects corrupt or ambiguous persisted state fail-closed', () => {
+  const valid = engine().exportState();
+  const invalidStates = [
+    null,
+    { ...valid, version: 2 },
+    { ...valid, cash: Number.NaN },
+    { ...valid, cash: -1 },
+    { ...valid, realizedPnl: Number.POSITIVE_INFINITY },
+    { ...valid, orders: {} },
+    { ...valid, fills: null },
+    { ...valid, positions: 'bad' },
+    { ...valid, orders: [{ clientOrderId: 'dup', symbol: 'BTCUSDT', side: 'BUY', qty: 1, type: 'MARKET', filledQty: 0, averageFillPrice: 0, status: 'CREATED' }, { clientOrderId: 'dup', symbol: 'BTCUSDT', side: 'BUY', qty: 1, type: 'MARKET', filledQty: 0, averageFillPrice: 0, status: 'CREATED' }] },
+    { ...valid, positions: [['BTCUSDT', { qty: -1, totalCost: 0 }]] },
+  ];
+  for (const state of invalidStates) {
+    assert.throws(() => PaperExecutionEngine.fromState(state), /INVALID_STATE/);
+  }
+});
+
+test('restart reconciliation rejects persisted accounting that disagrees with fills', () => {
+  const e = engine();
+  e.createOrder({ clientOrderId: 'reconcile-buy', symbol: 'ETHUSDT', side: 'BUY', qty: 1 });
+  e.applyMarketFill({ fillId: 'reconcile-buy-fill', clientOrderId: 'reconcile-buy', qty: 1, bid: 99, ask: 100 });
+  e.createOrder({ clientOrderId: 'reconcile-sell', symbol: 'ETHUSDT', side: 'SELL', qty: 0.25 });
+  e.applyMarketFill({ fillId: 'reconcile-sell-fill', clientOrderId: 'reconcile-sell', qty: 0.25, bid: 110, ask: 111 });
+  const valid = e.exportState();
+
+  const corruptStates = [
+    { ...structuredClone(valid), startingCash: 999 },
+    { ...structuredClone(valid), cash: valid.cash + 1 },
+    { ...structuredClone(valid), realizedPnl: valid.realizedPnl + 1 },
+    {
+      ...structuredClone(valid),
+      positions: valid.positions.map(([symbol, position]) => [symbol, { ...position, totalCost: position.totalCost + 1 }]),
+    },
+    {
+      ...structuredClone(valid),
+      fills: valid.fills.map((fill, index) => index === 0 ? { ...fill, fee: fill.fee + 1 } : fill),
+    },
+    {
+      ...structuredClone(valid),
+      orders: valid.orders.map((order, index) => index === 0 ? { ...order, filledQty: 0.5, status: 'PARTIALLY_FILLED' } : order),
+    },
+  ];
+
+  for (const state of corruptStates) {
+    assert.throws(() => PaperExecutionEngine.fromState(state), /INVALID_STATE/);
+  }
 });
 
 test('insufficient cash failure leaves portfolio unchanged', () => {
