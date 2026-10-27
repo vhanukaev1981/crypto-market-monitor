@@ -98,3 +98,13 @@ test('CANARY reservation release requires explicit non-dispatch reason',()=>{
   reject("select public.algobot_release_canary_reservation('"+id+"',null,1);");
   assert.equal(ok("select status from public.canary_reservations where id='"+id+"';"),'RESERVED');
 });
+
+test('ambiguous network outcome immediately locks trading and blocks next dispatch',()=>{
+  seed('task4-ambiguous-lock');
+  assert.equal(ok("select trading_state from bot_state_meta where singleton_key='ALGOBOT';"),'TRADING_ENABLED');
+  assert.equal(ok(unknown('task4-ambiguous-lock')),'UNKNOWN');
+  assert.equal(ok("select trading_state from bot_state_meta where singleton_key='ALGOBOT';"),'TRADING_LOCKED');
+  ok(create('task4-second-after-unknown'));ok(reserve('task4-second-after-unknown'));
+  reject(inflight('task4-second-after-unknown'));
+  assert.equal(ok("select status from execution_ledger where order_link_id='task4-second-after-unknown';"),'CREATED');
+});
