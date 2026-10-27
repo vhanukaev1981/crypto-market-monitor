@@ -641,7 +641,7 @@ begin
       end if;
     end loop;
   end loop;
-end
+end;
 $acl$;
 
 commit;
