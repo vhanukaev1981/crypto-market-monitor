@@ -7,10 +7,11 @@ on:
       - agent/claude-algobot-p0-task2
       - agent/chatgpt-algobot-p0-task3-fence
       - agent/chatgpt-algobot-p0-task4-ledger
+      - agent/chatgpt-algobot-p0-task5-exchange-evidence
     paths:
       - 'crypto-market-monitor-full-source/algo/**'
       - 'crypto-market-monitor-full-source/supabase/migrations/**'
-      - 'crypto-market-monitor-full-source/tests/algo-p0-*.test.mjs'
+      - 'crypto-market-monitor-full-source/tests/algo-*.test.mjs'
       - '.github/workflows/algobot-p0-postgres-tdd.yml'
   workflow_dispatch:
 
