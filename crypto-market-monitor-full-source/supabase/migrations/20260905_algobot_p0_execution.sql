@@ -273,7 +273,17 @@ begin
     raise exception 'cannot release reservation % because it is COMMITTED', p_reservation_id;
   end if;
 
-  -- v_reservation.status = 'RESERVED'
+  -- A client-supplied reason is insufficient proof of non-dispatch.
+  -- Refuse to free budget once ledger state indicates dispatch ambiguity.
+  if p_reason is distinct from 'proven_non_dispatch' then
+    raise exception 'reservation release requires proven_non_dispatch reason';
+  end if;
+  perform 1 from public.execution_ledger e
+    where e.id=v_reservation.execution_id and e.status='CREATED'
+      and e.reconciliation_status='PENDING' and e.exchange_order_id is null;
+  if not found then
+    raise exception 'reservation release forbidden after dispatch or ambiguous execution';
+  end if;
   update public.canary_reservations
     set status = 'RELEASED',
         updated_at = now()
@@ -374,5 +384,264 @@ begin
   where singleton_key='ALGOBOT';
 end;
 $$ language plpgsql;
+
+
+-- Task 4: ledger mutations only through fenced PostgreSQL transactions.
+-- Bybit facts are inputs to reconciliation and MUST be validated externally.
+create or replace function public.algobot_create_execution(
+  p_order_link_id text, p_symbol text, p_side text,
+  p_requested_qty numeric, p_requested_notional_usdt numeric,
+  p_fence_token bigint
+) returns setof public.execution_ledger as $$
+declare
+  v_meta public.bot_state_meta%rowtype;
+  v_existing public.execution_ledger%rowtype;
+begin
+  select * into v_meta from public.bot_state_meta
+    where singleton_key='ALGOBOT' for update;
+  if not found then raise exception 'bot_state_meta singleton missing'; end if;
+  if p_fence_token is distinct from v_meta.executor_fence_token or
+     v_meta.executor_owner_id is null or v_meta.lease_expires_at is null or
+     v_meta.lease_expires_at <= clock_timestamp() then
+    raise exception 'stale executor fence or expired lease';
+  end if;
+  if p_order_link_id is null or btrim(p_order_link_id)='' then
+    raise exception 'order link id required';
+  end if;
+  if p_symbol is distinct from 'BTCUSDT' or p_side not in ('BUY','SELL') or p_side is null then
+    raise exception 'only BTCUSDT Spot BUY/SELL execution intent supported';
+  end if;
+  if p_requested_qty is null or p_requested_qty < 0 or
+     p_requested_notional_usdt is null or p_requested_notional_usdt <= 0 or
+     p_requested_notional_usdt > v_meta.max_order_notional_usdt then
+    raise exception 'invalid execution quantity or order budget';
+  end if;
+  select * into v_existing from public.execution_ledger
+    where order_link_id=p_order_link_id for update;
+  if found then
+    if v_existing.symbol is distinct from p_symbol or v_existing.side is distinct from p_side
+      or v_existing.requested_qty is distinct from p_requested_qty or
+         v_existing.requested_notional_usdt is distinct from p_requested_notional_usdt then
+      raise exception 'conflicting duplicate execution request %', p_order_link_id;
+    end if;
+    return next v_existing;
+    return;
+  end if;
+  insert into public.execution_ledger(
+    order_link_id,symbol,side,requested_qty,requested_notional_usdt,
+    status,reconciliation_status,executor_fence_token
+  ) values (
+    p_order_link_id,p_symbol,p_side,p_requested_qty,p_requested_notional_usdt,
+    'CREATED','PENDING',p_fence_token
+  ) returning * into v_existing;
+  return next v_existing;
+end;
+$$ language plpgsql;
+
+create or replace function public.algobot_mark_execution_in_flight(
+  p_order_link_id text, p_fence_token bigint
+) returns setof public.execution_ledger as $$
+declare
+  v_meta public.bot_state_meta%rowtype;
+  v_execution public.execution_ledger%rowtype;
+begin
+  select * into v_meta from public.bot_state_meta where singleton_key='ALGOBOT' for update;
+  if not found then raise exception 'bot_state_meta singleton missing'; end if;
+  if p_fence_token is distinct from v_meta.executor_fence_token or
+     v_meta.executor_owner_id is null or v_meta.lease_expires_at is null or
+     v_meta.lease_expires_at <= clock_timestamp() then
+    raise exception 'stale executor fence or expired lease';
+  end if;
+  if v_meta.trading_state <> 'TRADING_ENABLED' then
+    raise exception 'execution forbidden: recovery gate not TRADING_ENABLED';
+  end if;
+  select * into v_execution from public.execution_ledger
+    where order_link_id=p_order_link_id for update;
+  if not found then raise exception 'execution not found %', p_order_link_id; end if;
+  if v_execution.status <> 'CREATED' then
+    raise exception 'illegal execution transition from % to IN_FLIGHT',v_execution.status;
+  end if;
+  if not exists (
+    select 1 from public.canary_reservations
+    where execution_id=v_execution.id and order_link_id=p_order_link_id
+      and status='RESERVED' and executor_fence_token=p_fence_token
+      and reserved_notional_usdt >= v_execution.requested_notional_usdt
+  ) then
+    raise exception 'no matching durable CANARY reservation for execution %',p_order_link_id;
+  end if;
+  update public.execution_ledger set status='IN_FLIGHT',
+    reconciliation_status='PENDING',executor_fence_token=p_fence_token,
+    updated_at=clock_timestamp()
+    where id=v_execution.id returning * into v_execution;
+  return next v_execution;
+end;
+$$ language plpgsql;
+
+create or replace function public.algobot_mark_execution_unknown(
+  p_order_link_id text, p_reason text, p_fence_token bigint
+) returns setof public.execution_ledger as $$
+declare
+  v_meta public.bot_state_meta%rowtype;
+  v_execution public.execution_ledger%rowtype;
+begin
+  select * into v_meta from public.bot_state_meta where singleton_key='ALGOBOT' for update;
+  if not found then raise exception 'bot_state_meta singleton missing'; end if;
+  if p_fence_token is distinct from v_meta.executor_fence_token or
+     v_meta.executor_owner_id is null or v_meta.lease_expires_at is null or
+     v_meta.lease_expires_at <= clock_timestamp() then
+    raise exception 'stale executor fence or expired lease';
+  end if;
+  if p_reason is null or btrim(p_reason)='' then raise exception 'UNKNOWN requires a reason'; end if;
+  select * into v_execution from public.execution_ledger
+    where order_link_id=p_order_link_id for update;
+  if not found then raise exception 'execution not found %',p_order_link_id; end if;
+  if v_execution.status not in ('CREATED','IN_FLIGHT','ACKNOWLEDGED','PARTIALLY_FILLED','UNKNOWN') then
+    raise exception 'cannot transition terminal execution % to UNKNOWN',p_order_link_id;
+  end if;
+  update public.execution_ledger set status='UNKNOWN',reconciliation_status='PENDING',
+    error_message=p_reason,executor_fence_token=p_fence_token,
+    updated_at=clock_timestamp()
+    where id=v_execution.id returning * into v_execution;
+  -- UNKNOWN means Bybit dispatch/outcome is ambiguous: lock new trading
+  -- in the same transaction as the durable UNKNOWN ledger transition.
+  update public.bot_state_meta set trading_state='TRADING_LOCKED',
+    updated_at=clock_timestamp() where singleton_key='ALGOBOT';
+  return next v_execution;
+end;
+$$ language plpgsql;
+
+create or replace function public.algobot_apply_execution_evidence(
+  p_order_link_id text, p_status text, p_exchange_order_id text,
+  p_filled_qty numeric, p_filled_notional_usdt numeric,
+  p_avg_fill_price numeric, p_fees_usdt numeric, p_fence_token bigint
+) returns setof public.execution_ledger as $$
+declare
+  v_meta public.bot_state_meta%rowtype;
+  v_execution public.execution_ledger%rowtype;
+begin
+  select * into v_meta from public.bot_state_meta where singleton_key='ALGOBOT' for update;
+  if not found then raise exception 'bot_state_meta singleton missing'; end if;
+  if p_fence_token is distinct from v_meta.executor_fence_token or
+     v_meta.executor_owner_id is null or v_meta.lease_expires_at is null or
+     v_meta.lease_expires_at <= clock_timestamp() then
+    raise exception 'stale executor fence or expired lease';
+  end if;
+  if p_status is null or p_status not in
+    ('ACKNOWLEDGED','PARTIALLY_FILLED','FILLED','REJECTED','CANCELLED','FAILED') then
+    raise exception 'invalid exchange evidence status';
+  end if;
+  if p_exchange_order_id is null or btrim(p_exchange_order_id)='' then
+    raise exception 'verified exchange evidence requires real order ID';
+  end if;
+  if p_filled_qty is null or p_filled_qty < 0 or
+     p_filled_notional_usdt is null or p_filled_notional_usdt < 0 or
+     p_fees_usdt is null or p_fees_usdt < 0 then
+    raise exception 'invalid exchange evidence fill/fees';
+  end if;
+  if p_filled_qty > 0 and (p_filled_notional_usdt <= 0 or
+      p_avg_fill_price is null or p_avg_fill_price <= 0) then
+    raise exception 'verified fill requires positive average price and notional';
+  end if;
+  if p_filled_qty = 0 and
+     (p_filled_notional_usdt <> 0 or p_fees_usdt <> 0 or p_avg_fill_price is not null) then
+    raise exception 'unfilled execution cannot carry fill notional, fees or price';
+  end if;
+  if p_status in ('PARTIALLY_FILLED','FILLED') and p_filled_qty <= 0 then
+    raise exception 'filled execution requires positive verified quantity';
+  end if;
+  select * into v_execution from public.execution_ledger
+    where order_link_id=p_order_link_id for update;
+  if not found then raise exception 'execution not found %',p_order_link_id; end if;
+  if v_execution.exchange_order_id is not null and
+     v_execution.exchange_order_id <> p_exchange_order_id then
+    raise exception 'conflicting exchange order ID for %',p_order_link_id;
+  end if;
+  if p_filled_qty < v_execution.filled_qty or
+     p_filled_notional_usdt < v_execution.filled_notional_usdt or
+     p_fees_usdt < v_execution.fees_usdt then
+    raise exception 'exchange evidence cannot reduce verified cumulative fills or fees';
+  end if;
+  if p_filled_notional_usdt > v_execution.requested_notional_usdt then
+    raise exception 'exchange evidence notional exceeds authorized order amount';
+  end if;
+  if v_execution.status in ('FILLED','REJECTED','CANCELLED','FAILED') then
+    if v_execution.status <> p_status or v_execution.exchange_order_id is distinct from p_exchange_order_id
+      or v_execution.filled_qty <> p_filled_qty or
+         v_execution.filled_notional_usdt <> p_filled_notional_usdt or
+         v_execution.fees_usdt <> p_fees_usdt or
+         v_execution.avg_fill_price is distinct from p_avg_fill_price then
+      raise exception 'conflicting terminal exchange evidence for %',p_order_link_id;
+    end if;
+    return next v_execution;
+    return;
+  end if;
+  if v_execution.status not in ('IN_FLIGHT','ACKNOWLEDGED','PARTIALLY_FILLED','UNKNOWN') then
+    raise exception 'execution not dispatchable/reconcilable from status %',v_execution.status;
+  end if;
+  if v_execution.status='PARTIALLY_FILLED' and p_status='ACKNOWLEDGED' then
+    raise exception 'cannot regress partial fill to acknowledged';
+  end if;
+  if v_execution.status='ACKNOWLEDGED' and p_status='ACKNOWLEDGED' and
+     (v_execution.filled_qty <> p_filled_qty or
+      v_execution.filled_notional_usdt <> p_filled_notional_usdt) then
+    raise exception 'conflicting acknowledged evidence';
+  end if;
+  update public.execution_ledger set
+    status=p_status,reconciliation_status='VERIFIED',
+    exchange_order_id=p_exchange_order_id,filled_qty=p_filled_qty,
+    filled_notional_usdt=p_filled_notional_usdt,
+    avg_fill_price=p_avg_fill_price,fees_usdt=p_fees_usdt,
+    executor_fence_token=p_fence_token,error_message=null,
+    updated_at=clock_timestamp()
+    where id=v_execution.id returning * into v_execution;
+  return next v_execution;
+end;
+$$ language plpgsql;
+
+create or replace function public.algobot_list_unresolved_executions()
+returns setof public.execution_ledger as $$
+begin
+  return query select e.* from public.execution_ledger e
+    where e.status not in ('FILLED','REJECTED','CANCELLED','FAILED')
+       or e.reconciliation_status <> 'VERIFIED'
+    order by e.created_at,e.id;
+end;
+$$ language plpgsql;
+
+-- Restrict untrusted roles from bypassing fenced transaction functions.
+-- Privileged service_role and DB owners still bypass these controls; separate
+-- least-privilege production credentials are mandatory before LIVE trading.
+alter table public.bot_state_meta enable row level security;
+alter table public.execution_ledger enable row level security;
+alter table public.canary_reservations enable row level security;
+alter table public.position_lifecycle enable row level security;
+revoke all on table public.bot_state_meta, public.execution_ledger,
+  public.canary_reservations, public.position_lifecycle from public;
+
+do $acl$
+declare
+  r record;
+  role_name text;
+begin
+  foreach role_name in array array['anon','authenticated'] loop
+    if exists(select 1 from pg_roles where rolname=role_name) then
+      execute format('revoke all on table public.bot_state_meta, public.execution_ledger, public.canary_reservations, public.position_lifecycle from %I',role_name);
+    end if;
+  end loop;
+  for r in
+    select p.oid::regprocedure as signature
+    from pg_proc p
+    join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname like 'algobot_%'
+  loop
+    execute format('revoke all on function %s from public',r.signature);
+    foreach role_name in array array['anon','authenticated'] loop
+      if exists(select 1 from pg_roles where rolname=role_name) then
+        execute format('revoke all on function %s from %I',r.signature,role_name);
+      end if;
+    end loop;
+  end loop;
+end;
+$acl$;
 
 commit;
