@@ -502,9 +502,13 @@ begin
     error_message=p_reason,executor_fence_token=p_fence_token,
     updated_at=clock_timestamp()
     where id=v_execution.id returning * into v_execution;
+  -- UNKNOWN means Bybit dispatch/outcome is ambiguous: lock new trading
+  -- in the same transaction as the durable UNKNOWN ledger transition.
+  update public.bot_state_meta set trading_state='TRADING_LOCKED',
+    updated_at=clock_timestamp() where singleton_key='ALGOBOT';
   return next v_execution;
 end;
-$$ language plpgsql;
+$ language plpgsql;
 
 create or replace function public.algobot_apply_execution_evidence(
   p_order_link_id text, p_status text, p_exchange_order_id text,
