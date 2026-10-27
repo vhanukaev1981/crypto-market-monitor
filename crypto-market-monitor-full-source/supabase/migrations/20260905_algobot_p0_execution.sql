@@ -273,7 +273,17 @@ begin
     raise exception 'cannot release reservation % because it is COMMITTED', p_reservation_id;
   end if;
 
-  -- v_reservation.status = 'RESERVED'
+  -- A client-supplied reason is insufficient proof of non-dispatch.
+  -- Refuse to free budget once ledger state indicates dispatch ambiguity.
+  if p_reason is distinct from 'proven_non_dispatch' then
+    raise exception 'reservation release requires proven_non_dispatch reason';
+  end if;
+  perform 1 from public.execution_ledger e
+    where e.id=v_reservation.execution_id and e.status='CREATED'
+      and e.reconciliation_status='PENDING' and e.exchange_order_id is null;
+  if not found then
+    raise exception 'reservation release forbidden after dispatch or ambiguous execution';
+  end if;
   update public.canary_reservations
     set status = 'RELEASED',
         updated_at = now()
@@ -593,5 +603,41 @@ begin
     order by e.created_at,e.id;
 end;
 $$ language plpgsql;
+
+-- Restrict untrusted roles from bypassing fenced transaction functions.
+-- Privileged service_role and DB owners still bypass these controls; separate
+-- least-privilege production credentials are mandatory before LIVE trading.
+alter table public.bot_state_meta enable row level security;
+alter table public.execution_ledger enable row level security;
+alter table public.canary_reservations enable row level security;
+alter table public.position_lifecycle enable row level security;
+revoke all on table public.bot_state_meta, public.execution_ledger,
+  public.canary_reservations, public.position_lifecycle from public;
+
+do $acl$
+declare
+  r record;
+  role_name text;
+begin
+  foreach role_name in array array['anon','authenticated'] loop
+    if exists(select 1 from pg_roles where rolname=role_name) then
+      execute format('revoke all on table public.bot_state_meta, public.execution_ledger, public.canary_reservations, public.position_lifecycle from %I',role_name);
+    end if;
+  end loop;
+  for r in
+    select p.oid::regprocedure as signature
+    from pg_proc p
+    join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname like 'algobot_%'
+  loop
+    execute format('revoke all on function %s from public',r.signature);
+    foreach role_name in array array['anon','authenticated'] loop
+      if exists(select 1 from pg_roles where rolname=role_name) then
+        execute format('revoke all on function %s from %I',r.signature,role_name);
+      end if;
+    end loop;
+  end loop;
+end
+$acl$;
 
 commit;
