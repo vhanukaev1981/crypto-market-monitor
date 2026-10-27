@@ -84,3 +84,17 @@ test('list unresolved includes UNKNOWN, excludes VERIFIED terminal',()=>{
  assert.equal(ok("select count(*) from public.algobot_list_unresolved_executions() where order_link_id='task4-active';"),'1');
  assert.equal(ok("select count(*) from public.algobot_list_unresolved_executions() where order_link_id='task4-complete';"),'0');
 });
+
+test('CANARY reservation cannot be released after IN_FLIGHT, even if reason claims non-dispatch',()=>{
+  seed('task4-dispatched-reservation');
+  const id=ok("select id from public.canary_reservations where order_link_id='task4-dispatched-reservation';");
+  reject("select public.algobot_release_canary_reservation('"+id+"','proven_non_dispatch',1);");
+  assert.equal(ok("select status from public.canary_reservations where id='"+id+"';"),'RESERVED');
+});
+test('CANARY reservation release requires explicit non-dispatch reason',()=>{
+  ok(create('task4-created-reservation'));ok(reserve('task4-created-reservation'));
+  const id=ok("select id from public.canary_reservations where order_link_id='task4-created-reservation';");
+  reject("select public.algobot_release_canary_reservation('"+id+"','anything_else',1);");
+  reject("select public.algobot_release_canary_reservation('"+id+"',null,1);");
+  assert.equal(ok("select status from public.canary_reservations where id='"+id+"';"),'RESERVED');
+});
