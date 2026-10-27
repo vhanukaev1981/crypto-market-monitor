@@ -508,7 +508,7 @@ begin
     updated_at=clock_timestamp() where singleton_key='ALGOBOT';
   return next v_execution;
 end;
-$ language plpgsql;
+$$ language plpgsql;
 
 create or replace function public.algobot_apply_execution_evidence(
   p_order_link_id text, p_status text, p_exchange_order_id text,
