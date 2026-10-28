@@ -1,3 +1,4 @@
+import { createDurableCanaryDispatcher } from './durable-canary-dispatch.mjs';
 import { createBybitV5ReadOnlyTransport } from './bybit-v5-readonly-transport.mjs';
 import { evaluateLiveCanaryOrder } from './live-canary-policy.mjs';
 import { evaluateLiveReadiness } from './live-readiness.mjs';
@@ -16,10 +17,7 @@ export function createBybitLiveAdapter(config = {}) {
   if (mode === 'LIVE') throw new Error('LIVE mode is disabled');
   if (!MODES.has(mode)) throw new Error(`Unsupported Bybit adapter mode: ${mode}`);
 
-  let cumulativeCommittedNotionalUsdt = 0;
   let reconciliationHealthy = true;
-  const executedOrders = new Map();
-  const inFlightOrders = new Set();
 
   const requireCredentials = () => {
     if (!config.apiKey || !config.apiSecret) throw new Error('Bybit credentials are required');
@@ -39,19 +37,27 @@ export function createBybitLiveAdapter(config = {}) {
     throw new Error('Bybit transport unavailable');
   };
 
+  const durable = mode==='CANARY' && config.executionStore && config.canaryBudgetStore &&
+    config.executorFence && config.recoveryGate && Number.isSafeInteger(config.fenceToken)
+    ? createDurableCanaryDispatcher({executionStore:config.executionStore,
+        canaryBudgetStore:config.canaryBudgetStore,executorFence:config.executorFence,
+        recoveryGate:config.recoveryGate,transport:getTransport(),fenceToken:config.fenceToken})
+    : null;
+
   const adapter = {
     mode,
 
     getCumulativeExposure() {
-      return cumulativeCommittedNotionalUsdt;
+      return null; // No RAM-backed exposure authority. Use PostgreSQL budget store.
     },
 
     isReconciliationHealthy() {
-      return reconciliationHealthy;
+      return reconciliationHealthy && (durable ? durable.isHealthy() : true);
     },
 
     resetReconciliationStatus(status = true) {
-      reconciliationHealthy = Boolean(status);
+      if(status===true)throw Error('RECOVERY_REQUIRED: health cannot be reset manually');
+      reconciliationHealthy = false;
     },
 
     async validateApiPermissions() {
@@ -124,163 +130,41 @@ export function createBybitLiveAdapter(config = {}) {
     },
 
     async submitCanaryOrder(request = {}) {
-      if (mode !== 'CANARY') throw new Error('Order submission blocked in READ_ONLY mode');
+      if(mode!=='CANARY')throw Error('Order submission blocked in READ_ONLY mode');
       requireCredentials();
-
-      if (request.humanApproved !== true) {
-        throw new Error('Explicit human approval required');
+      if(request.humanApproved!==true)throw Error('Explicit human approval required');
+      if(!reconciliationHealthy)throw Error('RECONCILIATION_UNHEALTHY: execution is locked');
+      const marketType=String(request.marketType??request.category??'').toUpperCase();
+      if(marketType!=='SPOT')throw Error('SPOT_ONLY_REQUIRED: Market type must be SPOT');
+      if((request.leverage??1)!==1)throw Error('LEVERAGE_MUST_BE_1');
+      const notionalUsdt=request.notionalUsdt??request.requestedNotionalUsd??request.approvedNotionalUsd;
+      if(!Number.isFinite(notionalUsdt)||notionalUsdt<=0)throw Error('INVALID_NOTIONAL');
+      if(notionalUsdt>MAX_ORDER_NOTIONAL_USDT)throw Error('MAX_ORDER_NOTIONAL_EXCEEDED: 10 USDT');
+      const policy=evaluateLiveCanaryOrder({enabled:true,qualification:request.qualification,
+        marketType:'SPOT',leverage:1,requestedNotionalUsd:notionalUsdt,
+        committedNotionalUsd:0});
+      if(!policy.allowed)throw Error('CANARY_POLICY_BLOCKED: '+policy.reasonCode);
+      if(String(request.symbol??'').toUpperCase()!=='BTCUSDT' ||
+        !['BUY','SELL'].includes(String(request.side??'').toUpperCase()) ||
+        (request.orderType!==undefined&&request.orderType!=='Market')){
+        throw Error('BTCUSDT_SPOT_MARKET_ONLY');
       }
-
-      if (!reconciliationHealthy) {
-        throw new Error('RECONCILIATION_UNHEALTHY: System locked due to previous reconciliation failure');
+      // No alternate legacy path: missing persistence always denies POST.
+      if(!durable)throw Error('DURABLE_EXECUTION_REQUIRED: P0 recovery and stores missing');
+      const permission=await adapter.validateApiPermissions();
+      if(!permission.spotEnabled||permission.readOnly){
+        throw Error('SPOT_PERMISSION_REQUIRED');
       }
-
-      const marketType = String(request.marketType || request.category || '').toUpperCase();
-      if (marketType !== 'SPOT') {
-        throw new Error('SPOT_ONLY_REQUIRED: Market type must be SPOT');
-      }
-
-      const leverage = request.leverage ?? 1;
-      if (leverage !== 1) {
-        throw new Error('LEVERAGE_MUST_BE_1: Leverage must equal 1');
-      }
-
-      const notionalUsdt = request.notionalUsdt ?? request.requestedNotionalUsd ?? request.approvedNotionalUsd;
-      if (!Number.isFinite(notionalUsdt) || notionalUsdt <= 0) {
-        throw new Error('INVALID_NOTIONAL: Order notional must be a positive finite number');
-      }
-
-      if (notionalUsdt > MAX_ORDER_NOTIONAL_USDT) {
-        throw new Error(`MAX_ORDER_NOTIONAL_EXCEEDED: Requested notional ${notionalUsdt} USDT exceeds ${MAX_ORDER_NOTIONAL_USDT} USDT limit`);
-      }
-
-      if (cumulativeCommittedNotionalUsdt + notionalUsdt > MAX_CUMULATIVE_EXPOSURE_USDT) {
-        throw new Error(`LIVE_CANARY_BUDGET_EXCEEDED: Cumulative exposure would reach ${cumulativeCommittedNotionalUsdt + notionalUsdt} USDT, exceeding ${MAX_CUMULATIVE_EXPOSURE_USDT} USDT cap`);
-      }
-
-      // Live canary policy verification
-      const canaryPolicy = evaluateLiveCanaryOrder({
-        enabled: true,
-        qualification: request.qualification,
-        marketType: 'SPOT',
-        leverage: 1,
-        requestedNotionalUsd: notionalUsdt,
-        committedNotionalUsd: cumulativeCommittedNotionalUsdt
-      });
-      if (!canaryPolicy.allowed) {
-        throw new Error(`CANARY_POLICY_BLOCKED: ${canaryPolicy.reasonCode}`);
-      }
-
-      // API permission verification
-      const permReport = await adapter.validateApiPermissions();
-      if (!permReport.spotEnabled) {
-        throw new Error('SPOT_PERMISSION_REQUIRED: Bybit API key must have Spot trading permission');
-      }
-
-      const orderLinkId = String(request.orderLinkId || generateUniqueOrderLinkId());
-      const symbol = String(request.symbol || 'BTCUSDT').toUpperCase();
-      const rawSide = String(request.side || 'BUY').toUpperCase();
-      const side = rawSide === 'BUY' ? 'Buy' : 'Sell';
-
-      // Idempotency & duplicate check
-      if (executedOrders.has(orderLinkId)) {
-        const existing = executedOrders.get(orderLinkId);
-        if (existing.symbol !== symbol || existing.side !== side || Math.abs(existing.notionalUsdt - notionalUsdt) > 1e-6) {
-          throw new Error(`IDEMPOTENCY_CONFLICT: orderLinkId ${orderLinkId} already executed with different parameters`);
-        }
-        return Object.freeze({
-          success: true,
-          duplicate: true,
-          reasonCode: 'EXECUTION_DUPLICATE_ORDER',
-          orderLinkId,
-          symbol,
-          side,
-          notionalUsdt,
-          cumulativeExposureUsdt: cumulativeCommittedNotionalUsdt,
-          order: existing.order
+      try{
+        return await durable.submit({
+          orderLinkId:request.orderLinkId,symbol:'BTCUSDT',
+          side:String(request.side).toUpperCase(),notionalUsdt
         });
-      }
-
-      if (inFlightOrders.has(orderLinkId)) {
-        throw new Error(`IDEMPOTENCY_CONFLICT: orderLinkId ${orderLinkId} is currently in flight`);
-      }
-
-      inFlightOrders.add(orderLinkId);
-
-      let orderResponse;
-      const transport = getTransport();
-      const orderPayload = {
-        category: 'spot',
-        symbol,
-        side,
-        orderType: request.orderType || 'Market',
-        qty: String(notionalUsdt),
-        marketUnit: 'quoteCoin',
-        orderLinkId
-      };
-
-      try {
-        if (typeof transport.placeOrder === 'function') {
-          orderResponse = await transport.placeOrder(orderPayload);
-        } else if (typeof transport.request === 'function') {
-          orderResponse = await transport.request({ operation: 'placeOrder', ...orderPayload });
-        } else {
-          throw new Error('Bybit transport unavailable for order placement');
-        }
-
-        if (!orderResponse || (orderResponse.retCode !== undefined && orderResponse.retCode !== 0)) {
-          throw new Error(`BYBIT_ORDER_FAILED: ${orderResponse?.retCode ?? 'unknown'} - ${orderResponse?.retMsg || 'Order placement rejected'}`);
-        }
-      } catch (error) {
-        inFlightOrders.delete(orderLinkId);
+      }catch(error){
+        // A local lock is strictly an additional defense; the dispatcher
+        // persists any post-dispatch ambiguity through the execution store.
+        if(String(error?.message).includes('CANARY_UNKNOWN_LOCKED'))reconciliationHealthy=false;
         throw error;
-      }
-
-      // Post-order reconciliation
-      let reconciled;
-      try {
-        if (typeof transport.reconcileOrder === 'function') {
-          reconciled = await transport.reconcileOrder({ orderLinkId, symbol });
-        } else if (typeof transport.request === 'function') {
-          reconciled = await transport.request({ operation: 'reconcileOrder', orderLinkId, symbol });
-        } else {
-          reconciled = { retCode: 0, result: { orderStatus: 'Filled', orderLinkId } };
-        }
-
-        const recResult = reconciled?.result || reconciled;
-        const status = recResult?.orderStatus || recResult?.status;
-        const failedStatuses = new Set(['Rejected', 'Cancelled', 'Deactivated', 'Failed']);
-
-        if (!reconciled || (reconciled.retCode !== undefined && reconciled.retCode !== 0) || !status || failedStatuses.has(status)) {
-          reconciliationHealthy = false;
-          throw new Error(`RECONCILIATION_FAILED: Order status '${status || 'UNKNOWN'}' rejected or unconfirmed: ${recResult?.rejectReason || reconciled?.retMsg || 'No detail'}`);
-        }
-
-        cumulativeCommittedNotionalUsdt += notionalUsdt;
-        executedOrders.set(orderLinkId, Object.freeze({
-          symbol,
-          side,
-          notionalUsdt,
-          order: recResult
-        }));
-
-        inFlightOrders.delete(orderLinkId);
-
-        return Object.freeze({
-          success: true,
-          duplicate: false,
-          reasonCode: 'EXECUTION_FILLED',
-          orderLinkId,
-          symbol,
-          side,
-          notionalUsdt,
-          cumulativeExposureUsdt: cumulativeCommittedNotionalUsdt,
-          order: recResult
-        });
-      } catch (reconError) {
-        reconciliationHealthy = false;
-        inFlightOrders.delete(orderLinkId);
-        throw reconError;
       }
     }
   };

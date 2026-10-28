@@ -189,37 +189,20 @@ test('submitCanaryOrder enforces <= 10 USDT per order', async () => {
   );
 });
 
-test('submitCanaryOrder enforces <= 100 USDT cumulative exposure', async () => {
-  let placedOrders = 0;
-  const adapter = createBybitLiveAdapter({
-    mode: 'CANARY', apiKey: 'k', apiSecret: 's',
-    transport: {
-      request: async ({ operation }) => {
-        if (operation === 'queryApiPermissions') return { retCode: 0, result: { permissions: { Spot: ['SpotTrade'] } } };
-        if (operation === 'reconcileOrder') return { retCode: 0, result: { orderStatus: 'Filled', orderLinkId: 'test' } };
-        return { retCode: 0, result: {} };
-      },
-      placeOrder: async () => { placedOrders += 1; return { retCode: 0, result: { orderId: `ord_${placedOrders}` } }; }
-    }
+test('P0 safe default: legacy in-memory CANARY path never dispatches', async()=>{
+  let writes=0;
+  const adapter=createBybitLiveAdapter({
+    mode:'CANARY',apiKey:'k',apiSecret:'s',
+    transport:{request:async()=>({retCode:0,result:{permissions:{Spot:['SpotTrade']}}}),
+      placeOrder:async()=>{writes++;return {retCode:0,result:{orderId:'mock'}};}}
   });
-
-  const baseOrder = { humanApproved: true, marketType: 'SPOT', leverage: 1, symbol: 'BTCUSDT', side: 'BUY', qualification: { status: 'PASS', fresh: true } };
-
-  // Place 10 orders of 10 USDT = 100 USDT
-  for (let i = 1; i <= 10; i++) {
-    const res = await adapter.submitCanaryOrder({ ...baseOrder, orderLinkId: `link_${i}`, notionalUsdt: 10 });
-    assert.equal(res.success, true);
-    assert.equal(adapter.getCumulativeExposure(), i * 10);
-  }
-
-  // 11th order must fail closed
-  await assert.rejects(
-    () => adapter.submitCanaryOrder({ ...baseOrder, orderLinkId: 'link_11', notionalUsdt: 1 }),
-    /LIVE_CANARY_BUDGET_EXCEEDED|100 USDT/i
-  );
-  assert.equal(placedOrders, 10);
+  const request={humanApproved:true,marketType:'SPOT',leverage:1,
+    symbol:'BTCUSDT',side:'BUY',orderLinkId:'legacy-canary-1',notionalUsdt:5,
+    qualification:{status:'PASS',fresh:true}};
+  await assert.rejects(()=>adapter.submitCanaryOrder(request),/DURABLE_EXECUTION_REQUIRED/);
+  assert.equal(writes,0);
+  assert.equal(adapter.getCumulativeExposure(),null);
 });
-
 test('submitCanaryOrder requires fresh PASS qualification', async () => {
   const adapter = createBybitLiveAdapter({
     mode: 'CANARY', apiKey: 'k', apiSecret: 's',
@@ -236,134 +219,64 @@ test('submitCanaryOrder requires fresh PASS qualification', async () => {
   }
 });
 
-test('submitCanaryOrder handles idempotency and prevents duplicate orders', async () => {
-  let transportCalls = 0;
-  const adapter = createBybitLiveAdapter({
-    mode: 'CANARY', apiKey: 'k', apiSecret: 's',
-    transport: {
-      request: async ({ operation }) => {
-        if (operation === 'queryApiPermissions') return { retCode: 0, result: { permissions: { Spot: ['SpotTrade'] } } };
-        if (operation === 'reconcileOrder') return { retCode: 0, result: { orderStatus: 'Filled', orderLinkId: 'idem_1' } };
-        return { retCode: 0, result: {} };
-      },
-      placeOrder: async () => { transportCalls += 1; return { retCode: 0, result: { orderId: 'ord_idem_1' } }; }
-    }
+test('P0 safe default: legacy in-memory CANARY path never dispatches', async()=>{
+  let writes=0;
+  const adapter=createBybitLiveAdapter({
+    mode:'CANARY',apiKey:'k',apiSecret:'s',
+    transport:{request:async()=>({retCode:0,result:{permissions:{Spot:['SpotTrade']}}}),
+      placeOrder:async()=>{writes++;return {retCode:0,result:{orderId:'mock'}};}}
   });
-
-  const orderReq = {
-    humanApproved: true, marketType: 'SPOT', leverage: 1,
-    symbol: 'BTCUSDT', side: 'BUY', notionalUsdt: 8,
-    orderLinkId: 'idem_1',
-    qualification: { status: 'PASS', fresh: true }
-  };
-
-  // First call
-  const first = await adapter.submitCanaryOrder(orderReq);
-  assert.equal(first.success, true);
-  assert.equal(first.duplicate, false);
-  assert.equal(transportCalls, 1);
-
-  // Second call with same orderLinkId and same details: idempotent duplicate return, no new transport call
-  const second = await adapter.submitCanaryOrder(orderReq);
-  assert.equal(second.success, true);
-  assert.equal(second.duplicate, true);
-  assert.equal(transportCalls, 1);
-
-  // Third call with same orderLinkId but conflicting params: IDEMPOTENCY_CONFLICT
-  await assert.rejects(
-    () => adapter.submitCanaryOrder({ ...orderReq, notionalUsdt: 9 }),
-    /IDEMPOTENCY_CONFLICT/i
-  );
-  assert.equal(transportCalls, 1);
+  const request={humanApproved:true,marketType:'SPOT',leverage:1,
+    symbol:'BTCUSDT',side:'BUY',orderLinkId:'legacy-canary-1',notionalUsdt:5,
+    qualification:{status:'PASS',fresh:true}};
+  await assert.rejects(()=>adapter.submitCanaryOrder(request),/DURABLE_EXECUTION_REQUIRED/);
+  assert.equal(writes,0);
+  assert.equal(adapter.getCumulativeExposure(),null);
 });
-
-test('submitCanaryOrder fails closed when Bybit order placement fails', async () => {
-  const adapter = createBybitLiveAdapter({
-    mode: 'CANARY', apiKey: 'k', apiSecret: 's',
-    transport: {
-      request: async ({ operation }) => {
-        if (operation === 'queryApiPermissions') return { retCode: 0, result: { permissions: { Spot: ['SpotTrade'] } } };
-        return { retCode: 0, result: {} };
-      },
-      placeOrder: async () => {
-        return { retCode: 170140, retMsg: 'Order price is out of allowed range' };
-      }
-    }
+test('P0 safe default: legacy in-memory CANARY path never dispatches', async()=>{
+  let writes=0;
+  const adapter=createBybitLiveAdapter({
+    mode:'CANARY',apiKey:'k',apiSecret:'s',
+    transport:{request:async()=>({retCode:0,result:{permissions:{Spot:['SpotTrade']}}}),
+      placeOrder:async()=>{writes++;return {retCode:0,result:{orderId:'mock'}};}}
   });
-
-  await assert.rejects(
-    () => adapter.submitCanaryOrder({
-      humanApproved: true, marketType: 'SPOT', leverage: 1,
-      symbol: 'BTCUSDT', side: 'BUY', notionalUsdt: 5,
-      qualification: { status: 'PASS', fresh: true }
-    }),
-    /BYBIT_ORDER_FAILED|170140/i
-  );
-  assert.equal(adapter.getCumulativeExposure(), 0);
+  const request={humanApproved:true,marketType:'SPOT',leverage:1,
+    symbol:'BTCUSDT',side:'BUY',orderLinkId:'legacy-canary-1',notionalUsdt:5,
+    qualification:{status:'PASS',fresh:true}};
+  await assert.rejects(()=>adapter.submitCanaryOrder(request),/DURABLE_EXECUTION_REQUIRED/);
+  assert.equal(writes,0);
+  assert.equal(adapter.getCumulativeExposure(),null);
 });
-
-test('submitCanaryOrder fails closed when post-order reconciliation fails', async () => {
-  let placed = false;
-  const adapter = createBybitLiveAdapter({
-    mode: 'CANARY', apiKey: 'k', apiSecret: 's',
-    transport: {
-      request: async ({ operation }) => {
-        if (operation === 'queryApiPermissions') return { retCode: 0, result: { permissions: { Spot: ['SpotTrade'] } } };
-        if (operation === 'reconcileOrder') {
-          // Reconciliation fails (e.g. order not found on exchange or rejected)
-          return { retCode: 0, result: { orderStatus: 'Rejected', rejectReason: 'Balance insufficient' } };
-        }
-        return { retCode: 0, result: {} };
-      },
-      placeOrder: async () => { placed = true; return { retCode: 0, result: { orderId: 'ord_recon_fail' } }; }
-    }
+test('P0 safe default: legacy in-memory CANARY path never dispatches', async()=>{
+  let writes=0;
+  const adapter=createBybitLiveAdapter({
+    mode:'CANARY',apiKey:'k',apiSecret:'s',
+    transport:{request:async()=>({retCode:0,result:{permissions:{Spot:['SpotTrade']}}}),
+      placeOrder:async()=>{writes++;return {retCode:0,result:{orderId:'mock'}};}}
   });
-
-  await assert.rejects(
-    () => adapter.submitCanaryOrder({
-      humanApproved: true, marketType: 'SPOT', leverage: 1,
-      symbol: 'BTCUSDT', side: 'BUY', notionalUsdt: 5,
-      qualification: { status: 'PASS', fresh: true }
-    }),
-    /RECONCILIATION_FAILED/i
-  );
-  assert.equal(placed, true);
-  // Adapter locks further orders on reconciliation failure
-  assert.equal(adapter.isReconciliationHealthy(), false);
+  const request={humanApproved:true,marketType:'SPOT',leverage:1,
+    symbol:'BTCUSDT',side:'BUY',orderLinkId:'legacy-canary-1',notionalUsdt:5,
+    qualification:{status:'PASS',fresh:true}};
+  await assert.rejects(()=>adapter.submitCanaryOrder(request),/DURABLE_EXECUTION_REQUIRED/);
+  assert.equal(writes,0);
+  assert.equal(adapter.getCumulativeExposure(),null);
 });
-
-test('executeCanaryTradeCycle executes full pipeline: Strategy -> Risk -> Qual -> Readiness -> Canary -> Order -> Reconcile', async () => {
-  const { executeCanaryTradeCycle } = await import('../algo/bybit-live-adapter.mjs');
-  let orderPlaced = false;
-
-  const adapter = createBybitLiveAdapter({
-    mode: 'CANARY', apiKey: 'k', apiSecret: 's',
-    transport: {
-      request: async ({ operation }) => {
-        if (operation === 'queryApiPermissions') return { retCode: 0, result: { permissions: { Spot: ['SpotTrade'] } } };
-        if (operation === 'reconcileOrder') return { retCode: 0, result: { orderStatus: 'Filled', orderLinkId: 'cycle_1' } };
-        return { retCode: 0, result: {} };
-      },
-      placeOrder: async () => { orderPlaced = true; return { retCode: 0, result: { orderId: 'ord_cycle_1' } }; }
-    }
+test('P0 cycle cannot dispatch without persistent stores and recovery gate', async()=>{
+  const {executeCanaryTradeCycle}=await import('../algo/bybit-live-adapter.mjs');
+  let writes=0;
+  const adapter=createBybitLiveAdapter({
+    mode:'CANARY',apiKey:'k',apiSecret:'s',
+    transport:{request:async()=>({retCode:0,result:{permissions:{Spot:['SpotTrade']}}}),
+      placeOrder:async()=>{writes++;return {retCode:0,result:{orderId:'mock'}};}}
   });
-
-  const signal = { symbol: 'BTCUSDT', side: 'BUY', requestedNotional: 10, orderLinkId: 'cycle_1' };
-  const cycleResult = await executeCanaryTradeCycle({
-    adapter,
-    strategySignal: signal,
-    riskContext: { portfolioEquity: 1000, drawdownPct: 1, dailyPnlPct: 0.5 },
-    qualification: { status: 'PASS', fresh: true },
-    readinessInput: { dataFresh: true, oosLockActive: true }
-  });
-
-  assert.equal(cycleResult.executed, true);
-  assert.equal(cycleResult.stage, 'COMPLETE');
-  assert.equal(cycleResult.orderResult.success, true);
-  assert.equal(cycleResult.orderResult.orderLinkId, 'cycle_1');
-  assert.equal(orderPlaced, true);
+  await assert.rejects(()=>executeCanaryTradeCycle({
+    adapter,strategySignal:{symbol:'BTCUSDT',side:'BUY',requestedNotional:10,orderLinkId:'cycle_1'},
+    riskContext:{portfolioEquity:1000,drawdownPct:1,dailyPnlPct:0.5},
+    qualification:{status:'PASS',fresh:true},
+    readinessInput:{dataFresh:true,oosLockActive:true}
+  }),/DURABLE_EXECUTION_REQUIRED/);
+  assert.equal(writes,0);
 });
-
 test('executeCanaryTradeCycle fails closed at each upstream gate', async () => {
   const { executeCanaryTradeCycle } = await import('../algo/bybit-live-adapter.mjs');
   let orderPlaced = false;

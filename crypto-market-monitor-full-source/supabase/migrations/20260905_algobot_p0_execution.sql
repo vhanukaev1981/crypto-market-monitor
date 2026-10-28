@@ -608,6 +608,31 @@ begin
 end;
 $$ language plpgsql;
 
+
+-- Any post-dispatch ambiguity (including a failed budget commit after a fill)
+-- must be able to lock trading independently of ledger status.
+create or replace function public.algobot_lock_trading(
+  p_executor_fence_token bigint, p_reason text
+) returns void as $$
+declare
+  v_meta public.bot_state_meta%rowtype;
+begin
+  select * into v_meta from public.bot_state_meta where singleton_key='ALGOBOT' for update;
+  if not found then raise exception 'bot_state_meta singleton missing'; end if;
+  if p_executor_fence_token is distinct from v_meta.executor_fence_token or
+     v_meta.executor_owner_id is null or v_meta.lease_expires_at is null or
+     v_meta.lease_expires_at <= clock_timestamp() then
+    raise exception 'stale executor fence or expired lease';
+  end if;
+  if p_reason is null or btrim(p_reason)='' then
+    raise exception 'trading lock reason required';
+  end if;
+  update public.bot_state_meta
+  set trading_state='TRADING_LOCKED',updated_at=clock_timestamp()
+  where singleton_key='ALGOBOT';
+end;
+$$ language plpgsql;
+
 -- Restrict untrusted roles from bypassing fenced transaction functions.
 -- Privileged service_role and DB owners still bypass these controls; separate
 -- least-privilege production credentials are mandatory before LIVE trading.

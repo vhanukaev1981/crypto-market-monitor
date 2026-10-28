@@ -108,3 +108,12 @@ test('ambiguous network outcome immediately locks trading and blocks next dispat
   reject(inflight('task4-second-after-unknown'));
   assert.equal(ok("select status from execution_ledger where order_link_id='task4-second-after-unknown';"),'CREATED');
 });
+
+test('executor can persist a fail-closed trading lock after accounting ambiguity',()=>{
+  ok("update bot_state_meta set trading_state='TRADING_ENABLED' where singleton_key='ALGOBOT';");
+  ok("select public.algobot_lock_trading(1,'CANARY_EXECUTION_UNCERTAIN');");
+  assert.equal(ok("select trading_state from bot_state_meta where singleton_key='ALGOBOT';"),'TRADING_LOCKED');
+  reject("select public.algobot_lock_trading(0,'stale-token');");
+  assert.equal(ok("select trading_state from bot_state_meta where singleton_key='ALGOBOT';"),'TRADING_LOCKED');
+  reject("select public.algobot_lock_trading(1,'');");
+});

@@ -8,6 +8,7 @@ on:
       - agent/chatgpt-algobot-p0-task3-fence
       - agent/chatgpt-algobot-p0-task4-ledger
       - agent/chatgpt-algobot-p0-task5-exchange-evidence
+      - agent/chatgpt-algobot-p0-task6-crashsafe
     paths:
       - 'crypto-market-monitor-full-source/algo/**'
       - 'crypto-market-monitor-full-source/supabase/migrations/**'
