@@ -52,7 +52,7 @@ test('execution ledger has required durable execution evidence columns', () => {
 });
 
 test('order_link_id is unique and illegal execution state is rejected', () => {
-  exec(`delete from canary_reservations; delete from position_lifecycle; delete from execution_ledger;`);
+  exec(`delete from position_fill_events; delete from canary_reservations; delete from position_lifecycle; delete from execution_ledger;`);
   exec(`insert into execution_ledger(order_link_id,symbol,side,requested_qty,requested_notional_usdt,status,reconciliation_status,executor_fence_token) values ('p0-schema-1','BTCUSDT','BUY',0.0001,10,'CREATED','PENDING',1);`);
   expectSqlFailure(`insert into execution_ledger(order_link_id,symbol,side,requested_qty,requested_notional_usdt,status,reconciliation_status,executor_fence_token) values ('p0-schema-1','BTCUSDT','BUY',0.0001,10,'CREATED','PENDING',1);`, /duplicate key|unique/i);
   expectSqlFailure(`insert into execution_ledger(order_link_id,symbol,side,requested_qty,requested_notional_usdt,status,reconciliation_status,executor_fence_token) values ('p0-schema-bad','BTCUSDT','BUY',0.0001,10,'SYNTHETIC_FILLED','PENDING',1);`, /check constraint/i);
