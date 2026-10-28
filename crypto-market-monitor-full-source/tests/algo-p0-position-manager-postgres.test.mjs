@@ -72,7 +72,9 @@ test('requestExit persists unique exit intent before SELL, forbids OPENING and d
  buyLedger();ok(buy('exec-buy-1','0.08'));
  const id=positionId();
  rejects("select status from public.algobot_request_position_exit('"+id+"','take-profit','sell-pos-1',1);");
- openBuy();assert.equal(ok("select status from public.algobot_request_position_exit('"+id+"','take-profit','sell-pos-1',1);"),'EXIT_PENDING');
+ ok("update public.execution_ledger set status='FILLED',filled_qty=0.2,filled_notional_usdt=8,fees_usdt=0.05 where order_link_id='buy-pos-1';");
+ ok(buy('exec-buy-2','0.12','40','0.03'));
+ assert.equal(ok("select status from public.algobot_request_position_exit('"+id+"','take-profit','sell-pos-1',1);"),'EXIT_PENDING');
  assert.equal(ok("select exit_order_link_id from position_lifecycle where id='"+id+"';"),'sell-pos-1');
  rejects("select status from public.algobot_request_position_exit('"+id+"','retry','different-link',1);");
 });

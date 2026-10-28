@@ -669,4 +669,169 @@ begin
 end;
 $acl$;
 
+
+-- P0 Task 7: exchange-fill projections are idempotent, fenced and durable.
+alter table public.position_lifecycle
+  add column if not exists source_buy_order_link_id text unique,
+  add column if not exists exit_order_link_id text unique;
+create table if not exists public.position_fill_events(
+ id uuid primary key default gen_random_uuid(),
+ position_id uuid not null references public.position_lifecycle(id),
+ order_link_id text not null references public.execution_ledger(order_link_id),
+ exec_id text not null unique,
+ side text not null check(side in ('BUY','SELL')),
+ qty numeric(30,12) not null check(qty>0),
+ price numeric(30,12) not null check(price>0),
+ fee_usdt numeric(30,12) not null check(fee_usdt>=0),
+ created_at timestamptz not null default now()
+);
+alter table public.position_fill_events enable row level security;
+revoke all on public.position_fill_events from public;
+do $acl$ begin
+ if exists(select 1 from pg_roles where rolname='anon') then
+   revoke all on public.position_fill_events from anon;
+ end if;
+ if exists(select 1 from pg_roles where rolname='authenticated') then
+   revoke all on public.position_fill_events from authenticated;
+ end if;
+end; $acl$;
+
+create or replace function public.algobot_apply_position_buy_fill(
+ p_order_link_id text,p_exec_id text,p_qty numeric,p_price numeric,
+ p_fee_usdt numeric,p_fence_token bigint)
+returns setof public.position_lifecycle as $$
+declare
+ m public.bot_state_meta%rowtype;
+ e public.execution_ledger%rowtype;
+ p public.position_lifecycle%rowtype;
+ prior public.position_fill_events%rowtype;
+ total_qty numeric;
+ total_fee numeric;
+begin
+ select * into m from public.bot_state_meta where singleton_key='ALGOBOT' for update;
+ if not found or p_fence_token is distinct from m.executor_fence_token or
+  m.executor_owner_id is null or m.lease_expires_at is null or
+  m.lease_expires_at <= clock_timestamp() then raise exception 'stale executor fence'; end if;
+ if p_exec_id is null or btrim(p_exec_id)='' or p_qty is null or p_qty<=0 or
+   p_price is null or p_price<=0 or p_fee_usdt is null or p_fee_usdt<0 then
+   raise exception 'invalid verified buy fill';end if;
+ select * into e from public.execution_ledger where order_link_id=p_order_link_id for update;
+ if not found or e.side<>'BUY' or e.symbol<>'BTCUSDT' or
+  e.reconciliation_status<>'VERIFIED' or e.status not in ('PARTIALLY_FILLED','FILLED') then
+  raise exception 'BUY ledger evidence unavailable'; end if;
+ select * into prior from public.position_fill_events where exec_id=p_exec_id for update;
+ if found then
+  if prior.side<>'BUY' or prior.order_link_id is distinct from p_order_link_id or
+   prior.qty is distinct from p_qty or prior.price is distinct from p_price or
+   prior.fee_usdt is distinct from p_fee_usdt then raise exception 'conflicting fill replay'; end if;
+  return query select * from public.position_lifecycle where id=prior.position_id;
+  return;
+ end if;
+ select coalesce(sum(qty),0),coalesce(sum(fee_usdt),0) into total_qty,total_fee
+  from public.position_fill_events where order_link_id=p_order_link_id and side='BUY';
+ if total_qty+p_qty>e.filled_qty or total_fee+p_fee_usdt>e.fees_usdt then
+  raise exception 'BUY fill exceeds verified exchange cumulative totals'; end if;
+ select * into p from public.position_lifecycle where source_buy_order_link_id=p_order_link_id for update;
+ if not found then
+  insert into public.position_lifecycle(symbol,side,status,quantity,average_entry_price,
+    fees_usdt,realized_pnl_usdt,executor_fence_token,source_buy_order_link_id)
+  values('BTCUSDT','BUY','OPENING',0,null,0,0,p_fence_token,p_order_link_id)
+  returning * into p;
+ end if;
+ if p.status not in ('OPENING','OPEN') then raise exception 'buy position not addable';end if;
+ insert into public.position_fill_events(position_id,order_link_id,exec_id,side,qty,price,fee_usdt)
+ values(p.id,p_order_link_id,p_exec_id,'BUY',p_qty,p_price,p_fee_usdt);
+ update public.position_lifecycle set
+  average_entry_price=(coalesce(p.average_entry_price,0)*p.quantity+p_qty*p_price+p_fee_usdt)/(p.quantity+p_qty),
+  quantity=p.quantity+p_qty,
+  fees_usdt=p.fees_usdt+p_fee_usdt,
+  status=case when e.status='FILLED' and total_qty+p_qty=e.filled_qty then 'OPEN' else 'OPENING' end,
+  executor_fence_token=p_fence_token,updated_at=clock_timestamp()
+ where id=p.id returning * into p;
+ return next p;
+end; $$ language plpgsql;
+
+create or replace function public.algobot_request_position_exit(
+ p_position_id uuid,p_reason text,p_exit_order_link_id text,p_fence_token bigint)
+returns setof public.position_lifecycle as $$
+declare
+ m public.bot_state_meta%rowtype;
+ p public.position_lifecycle%rowtype;
+begin
+ select * into m from bot_state_meta where singleton_key='ALGOBOT' for update;
+ if not found or p_fence_token is distinct from m.executor_fence_token or
+  m.executor_owner_id is null or m.lease_expires_at is null or m.lease_expires_at<=clock_timestamp()
+ then raise exception 'stale executor fence';end if;
+ if p_reason is null or btrim(p_reason)='' or
+  p_exit_order_link_id is null or btrim(p_exit_order_link_id)='' then
+  raise exception 'exit reason and id required';end if;
+ select * into p from position_lifecycle where id=p_position_id for update;
+ if not found or p.status<>'OPEN' or p.quantity<=0 or p.exit_order_link_id is not null then
+  raise exception 'only OPEN position may request a single exit';end if;
+ update position_lifecycle set status='EXIT_PENDING',exit_order_link_id=p_exit_order_link_id,
+  executor_fence_token=p_fence_token,updated_at=clock_timestamp()
+ where id=p.id returning * into p;
+ return next p;
+end; $$ language plpgsql;
+
+create or replace function public.algobot_apply_position_sell_fill(
+ p_position_id uuid,p_order_link_id text,p_exec_id text,p_qty numeric,p_price numeric,
+ p_fee_usdt numeric,p_fence_token bigint)
+returns setof public.position_lifecycle as $$
+declare
+ m public.bot_state_meta%rowtype;
+ e public.execution_ledger%rowtype;
+ p public.position_lifecycle%rowtype;
+ prior public.position_fill_events%rowtype;
+ total_qty numeric;
+ total_fee numeric;
+begin
+ select * into m from bot_state_meta where singleton_key='ALGOBOT' for update;
+ if not found or p_fence_token is distinct from m.executor_fence_token or
+  m.executor_owner_id is null or m.lease_expires_at is null or m.lease_expires_at<=clock_timestamp()
+ then raise exception 'stale executor fence';end if;
+ if p_exec_id is null or btrim(p_exec_id)='' or p_qty is null or p_qty<=0 or
+  p_price is null or p_price<=0 or p_fee_usdt is null or p_fee_usdt<0 then
+  raise exception 'invalid verified sell fill';end if;
+ select * into p from position_lifecycle where id=p_position_id for update;
+ if not found or p.exit_order_link_id is distinct from p_order_link_id then
+  raise exception 'SELL exit intent missing';end if;
+ select * into prior from position_fill_events where exec_id=p_exec_id for update;
+ if found then
+  if prior.position_id is distinct from p_position_id or prior.side<>'SELL' or
+   prior.order_link_id is distinct from p_order_link_id or prior.qty is distinct from p_qty or
+   prior.price is distinct from p_price or prior.fee_usdt is distinct from p_fee_usdt
+  then raise exception 'conflicting sell replay';end if;
+  return next p;return;
+ end if;
+ if p.status not in ('EXIT_PENDING','CLOSING') then raise exception 'SELL position not closing';end if;
+ select * into e from execution_ledger where order_link_id=p_order_link_id for update;
+ if not found or e.symbol<>'BTCUSDT' or e.side<>'SELL' or
+  e.reconciliation_status<>'VERIFIED' or e.status not in ('PARTIALLY_FILLED','FILLED')
+ then raise exception 'SELL ledger evidence unavailable';end if;
+ select coalesce(sum(qty),0),coalesce(sum(fee_usdt),0) into total_qty,total_fee
+  from position_fill_events where order_link_id=p_order_link_id and side='SELL';
+ if total_qty+p_qty>e.filled_qty or total_fee+p_fee_usdt>e.fees_usdt or p_qty>p.quantity then
+  raise exception 'SELL fill exceeds verified inventory/ledger quantity';end if;
+ insert into position_fill_events(position_id,order_link_id,exec_id,side,qty,price,fee_usdt)
+  values(p.id,p_order_link_id,p_exec_id,'SELL',p_qty,p_price,p_fee_usdt);
+ update position_lifecycle set
+  quantity=p.quantity-p_qty,fees_usdt=p.fees_usdt+p_fee_usdt,
+  realized_pnl_usdt=p.realized_pnl_usdt+p_qty*(p_price-p.average_entry_price)-p_fee_usdt,
+  status=case when p.quantity-p_qty=0 and e.status='FILLED' and
+   total_qty+p_qty=e.filled_qty then 'CLOSED' else 'CLOSING' end,
+  executor_fence_token=p_fence_token,updated_at=clock_timestamp()
+ where id=p.id returning * into p;
+ return next p;
+end; $$ language plpgsql;
+
+create or replace function public.algobot_list_managed_positions()
+returns setof public.position_lifecycle as $$
+begin return query select * from position_lifecycle where status<>'CLOSED' order by created_at,id;
+end; $$ language plpgsql;
+revoke all on function public.algobot_apply_position_buy_fill(text,text,numeric,numeric,numeric,bigint) from public;
+revoke all on function public.algobot_request_position_exit(uuid,text,text,bigint) from public;
+revoke all on function public.algobot_apply_position_sell_fill(uuid,text,text,numeric,numeric,numeric,bigint) from public;
+revoke all on function public.algobot_list_managed_positions() from public;
+
 commit;
