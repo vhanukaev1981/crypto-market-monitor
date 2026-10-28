@@ -59,6 +59,13 @@ export function createExecutionStore({ pool } = {}) {
         [requiredText('orderLinkId',orderLinkId),requiredText('reason',reason),
           requiredToken(fenceToken)],'markUnknown');
     },
+    async lockTrading({fenceToken,reason}={}) {
+      if(typeof reason!=='string'||!reason.trim())throw Error('trading lock reason required');
+      const result=await pool.query('select public.algobot_lock_trading($1,$2) as locked',
+        [requiredToken(fenceToken),reason]);
+      if(!result||!Array.isArray(result.rows)||!result.rows[0])throw Error('execution-store: trading lock unconfirmed');
+      return {locked:true};
+    },
     async getByOrderLinkId({orderLinkId}={}) {
       const result=await pool.query('select * from public.execution_ledger where order_link_id=$1',
         [requiredText('orderLinkId',orderLinkId)]);

@@ -56,7 +56,7 @@ function fixture(overrides={}){
    get placed(){return placed;},get enabled(){return enabled;},...overrides};
 }
 const create=(cfg)=>createBybitLiveAdapter({
- mode:'CANARY',apiKey:'unit-key',apiSecret:'unit-secret',...cfg
+ mode:'CANARY',apiKey:'unit-key',apiSecret:'unit-secret',fenceToken:1,...cfg
 });
 
 test('legacy CANARY with no persistent controls can never POST',async()=>{
@@ -126,9 +126,8 @@ test('non-USDT fee cannot be silently misrecorded as fees_usdt',async()=>{
  assert.equal(fx.rows.get(order.orderLinkId).status,'UNKNOWN');
 });
 test('ledger persistence outage cannot trigger POST',async()=>{
- const fx=fixture({executionStore:{
-  async getByOrderLinkId(){return null;},
-  async createExecution(){throw Error('PostgreSQL offline');}}});
+ const fx=fixture();
+ fx.executionStore.createExecution=async()=>{throw Error('PostgreSQL offline');};
  await assert.rejects(()=>create(fx).submitCanaryOrder(order),/PostgreSQL offline/);
  assert.equal(fx.placed,0);
 });
